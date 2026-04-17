@@ -46,8 +46,40 @@ def _looks_suspicious(source_text, candidate):
     return False
 
 
+def _should_use_deepseek_first(text):
+    value = str(text).strip()
+    if not deepseek_available():
+        return False
+
+    if not has_chinese(value):
+        return False
+
+    if len(value) >= 180:
+        return True
+
+    if value.count("，") + value.count(",") >= 4:
+        return True
+
+    if value.count("。") + value.count(";") + value.count("；") >= 2:
+        return True
+
+    if "\n" in value and len(value) >= 120:
+        return True
+
+    return False
+
+
 def _translate_one(source_text, model_text):
     source_text = str(source_text)
+
+    if _should_use_deepseek_first(source_text):
+        try:
+            deepseek_text = cleanup_translation(deepseek_translate(source_text))
+            if not _looks_suspicious(source_text, deepseek_text):
+                return deepseek_text
+        except Exception as e:
+            print("deepseek preflight error:", e)
+
     candidate = cleanup_translation(model_text)
 
     if not candidate:
@@ -82,10 +114,18 @@ def _translate_one(source_text, model_text):
 def translate_df(df):
     texts = df["text"].astype(str).tolist()
     texts = [t[:1200] for t in texts]
-
-    batch_size = 12
     translated = []
     total = len(texts)
+
+    max_len = max((len(t) for t in texts), default=0)
+    avg_len = (sum(len(t) for t in texts) / len(texts)) if texts else 0
+
+    if max_len >= 500 or avg_len >= 220:
+        batch_size = 3
+    elif max_len >= 280 or avg_len >= 140:
+        batch_size = 5
+    else:
+        batch_size = 8
 
     for i in range(0, total, batch_size):
         print(f"batch {i} / {total}")

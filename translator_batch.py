@@ -5,6 +5,7 @@ import requests
 
 MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "240"))
 
 
 def _generate(prompt, *, num_predict=256):
@@ -21,7 +22,7 @@ def _generate(prompt, *, num_predict=256):
                 "repeat_penalty": 1.1,
             },
         },
-        timeout=90,
+        timeout=OLLAMA_TIMEOUT,
     )
     response.raise_for_status()
     payload = response.json()
