@@ -8,12 +8,32 @@ os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 _OCR = None
 
 
+def _build_ocr_instance():
+    from paddleocr import PaddleOCR
+
+    base_kwargs = {"use_angle_cls": True, "lang": "ch"}
+    attempts = [
+        {**base_kwargs, "show_log": False},
+        dict(base_kwargs),
+    ]
+
+    last_error = None
+    for kwargs in attempts:
+        try:
+            return PaddleOCR(**kwargs)
+        except (TypeError, ValueError) as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+
+    raise RuntimeError("Unable to initialize PaddleOCR.")
+
+
 def _get_ocr():
     global _OCR
     if _OCR is None:
-        from paddleocr import PaddleOCR
-
-        _OCR = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+        _OCR = _build_ocr_instance()
     return _OCR
 
 

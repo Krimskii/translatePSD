@@ -78,7 +78,10 @@ def _ocr_blocks_from_page(page: fitz.Page, page_index: int):
         image_path = tmp.name
 
     try:
-        ocr_boxes = detect_text_boxes(image_path)
+        try:
+            ocr_boxes = detect_text_boxes(image_path)
+        except Exception:
+            return []
     finally:
         try:
             import os
