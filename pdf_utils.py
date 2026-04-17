@@ -16,6 +16,60 @@ class PdfTextBlock:
     align: int
 
 
+def _page_dict_to_blocks(page_dict, page_index: int) -> list[PdfTextBlock]:
+    page_blocks: list[PdfTextBlock] = []
+
+    for block in page_dict.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+
+        lines = block.get("lines", [])
+        if not lines:
+            continue
+
+        parts = []
+        sizes = []
+        colors = []
+        align = fitz.TEXT_ALIGN_LEFT
+
+        for line in lines:
+            line_parts = []
+            line_bbox = tuple(line.get("bbox", block.get("bbox")))
+            align = _block_alignment(block.get("bbox", line_bbox), line_bbox)
+
+            for span in line.get("spans", []):
+                span_text = str(span.get("text", ""))
+                if not span_text.strip():
+                    continue
+                line_parts.append(span_text)
+                sizes.append(float(span.get("size", 10)))
+                colors.append(_int_to_rgb(int(span.get("color", 0))))
+
+            if line_parts:
+                parts.append("".join(line_parts).strip())
+
+        clean_text = "\n".join(part for part in parts if part).strip()
+        if not clean_text:
+            continue
+
+        bbox = tuple(float(v) for v in block.get("bbox"))
+        font_size = max(sum(sizes) / len(sizes), 6.0) if sizes else 10.0
+        color = colors[0] if colors else (0, 0, 0)
+
+        page_blocks.append(
+            PdfTextBlock(
+                page_index=page_index,
+                bbox=bbox,
+                text=clean_text,
+                font_size=font_size,
+                color=color,
+                align=align,
+            )
+        )
+
+    return page_blocks
+
+
 def open_pdf_document(source):
     if isinstance(source, (str, bytes, bytearray)):
         return fitz.open(source)
@@ -122,6 +176,23 @@ def _ocr_blocks_from_page(page: fitz.Page, page_index: int):
     return blocks
 
 
+def _ocr_blocks_from_textpage(page: fitz.Page, page_index: int):
+    try:
+        textpage = page.get_textpage_ocr(language="chi_sim+eng", dpi=200, full=True)
+    except Exception:
+        return []
+
+    try:
+        try:
+            page_dict = page.get_text("dict", textpage=textpage)
+        except TypeError:
+            page_dict = textpage.extractDICT()
+    except Exception:
+        return []
+
+    return _page_dict_to_blocks(page_dict, page_index)
+
+
 def extract_pdf_blocks(src) -> list[PdfTextBlock]:
     doc = open_pdf_document(src)
     blocks: list[PdfTextBlock] = []
@@ -129,58 +200,12 @@ def extract_pdf_blocks(src) -> list[PdfTextBlock]:
     try:
         for page_index, page in enumerate(doc):
             page_dict = page.get_text("dict")
-            page_blocks: list[PdfTextBlock] = []
-
-            for block in page_dict.get("blocks", []):
-                if block.get("type") != 0:
-                    continue
-
-                lines = block.get("lines", [])
-                if not lines:
-                    continue
-
-                parts = []
-                sizes = []
-                colors = []
-                align = fitz.TEXT_ALIGN_LEFT
-
-                for line in lines:
-                    line_parts = []
-                    line_bbox = tuple(line.get("bbox", block.get("bbox")))
-                    align = _block_alignment(block.get("bbox", line_bbox), line_bbox)
-
-                    for span in line.get("spans", []):
-                        span_text = str(span.get("text", ""))
-                        if not span_text.strip():
-                            continue
-                        line_parts.append(span_text)
-                        sizes.append(float(span.get("size", 10)))
-                        colors.append(_int_to_rgb(int(span.get("color", 0))))
-
-                    if line_parts:
-                        parts.append("".join(line_parts).strip())
-
-                clean_text = "\n".join(part for part in parts if part).strip()
-                if not clean_text:
-                    continue
-
-                bbox = tuple(float(v) for v in block.get("bbox"))
-                font_size = max(sum(sizes) / len(sizes), 6.0) if sizes else 10.0
-                color = colors[0] if colors else (0, 0, 0)
-
-                page_blocks.append(
-                    PdfTextBlock(
-                        page_index=page_index,
-                        bbox=bbox,
-                        text=clean_text,
-                        font_size=font_size,
-                        color=color,
-                        align=align,
-                    )
-                )
+            page_blocks = _page_dict_to_blocks(page_dict, page_index)
 
             if not page_blocks:
                 page_blocks.extend(_ocr_blocks_from_page(page, page_index))
+            if not page_blocks:
+                page_blocks.extend(_ocr_blocks_from_textpage(page, page_index))
 
             blocks.extend(page_blocks)
     finally:
