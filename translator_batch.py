@@ -7,6 +7,27 @@ MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 
 
+def _generate(prompt, *, num_predict=256):
+    response = requests.post(
+        OLLAMA_URL,
+        json={
+            "model": MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": 0,
+                "num_predict": num_predict,
+                "top_p": 1,
+                "repeat_penalty": 1.1,
+            },
+        },
+        timeout=90,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return str(payload.get("response", ""))
+
+
 def ollama_batch(texts):
     if not texts:
         return []
@@ -27,25 +48,7 @@ Rules:
 """
 
     try:
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0,
-                    "num_predict": 256,
-                    "top_p": 1,
-                    "repeat_penalty": 1.1,
-                },
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        result = str(payload.get("response", ""))
-
+        result = _generate(prompt, num_predict=512)
         translations = [t.strip() for t in result.split("@@@")]
         fixed = []
 
@@ -60,3 +63,26 @@ Rules:
     except Exception as e:
         print("Ошибка Ollama:", e)
         return texts
+
+
+def ollama_translate_one(text):
+    source_text = str(text)
+    prompt = f"""
+Translate the following Chinese engineering text into Russian.
+
+Rules:
+- keep paragraph structure when possible
+- keep numbers, units, abbreviations and section numbering
+- translate all Chinese text fully
+- do not add comments
+- return only the translated Russian text
+
+Text:
+{source_text}
+"""
+
+    try:
+        return _generate(prompt, num_predict=1024).strip()
+    except Exception as e:
+        print("Ошибка Ollama single:", e)
+        return source_text
