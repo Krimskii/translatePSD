@@ -49,6 +49,7 @@ if uploaded_files:
 
     if st.session_state.get("source_names") != source_names:
         st.session_state.pop("df", None)
+        st.session_state.pop("base_df", None)
         st.session_state.pop("batch_results", None)
         st.session_state.pop("batch_zip", None)
         st.session_state.pop("batch_report_df", None)
@@ -132,8 +133,16 @@ if uploaded_files:
             st.error("Поддерживаются Excel / PDF / DOCX / DXF")
             st.stop()
 
-        if "df" not in st.session_state:
-            st.session_state.df = df.copy()
+        parsed_df = df.copy()
+        current_df = st.session_state.get("df")
+        base_df = st.session_state.get("base_df")
+
+        if current_df is None or base_df is None:
+            st.session_state["df"] = parsed_df.copy()
+        elif current_df.empty and not parsed_df.empty:
+            st.session_state["df"] = parsed_df.copy()
+
+        st.session_state["base_df"] = parsed_df.copy()
 
         if filename.endswith(".pdf") and st.session_state.df.empty:
             st.warning(
