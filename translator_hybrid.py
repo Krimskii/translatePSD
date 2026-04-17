@@ -4,6 +4,8 @@ import pandas as pd
 
 from apply_cad_dict import apply_cad_dict
 from post_translate_fix import cleanup_translation, has_chinese
+from section_dictionary import apply_section_terms, detect_section_for_text
+from translation_memory import get_memory_translation, update_memory_entry
 from translator_batch import ollama_batch, ollama_translate_one
 from translator_deepseek import deepseek_available, deepseek_translate
 
@@ -69,53 +71,68 @@ def _should_use_deepseek_first(text):
     return False
 
 
-def _translate_one(source_text, model_text):
+def _translate_one(source_text, model_text, section):
     source_text = str(source_text)
+    memory_hit = get_memory_translation(source_text, section)
+    if memory_hit:
+        return memory_hit, "memory"
+
+    source_with_terms = apply_section_terms(source_text, section)
 
     if _should_use_deepseek_first(source_text):
         try:
-            deepseek_text = cleanup_translation(deepseek_translate(source_text))
+            deepseek_text = cleanup_translation(apply_section_terms(deepseek_translate(source_text), section))
             if not _looks_suspicious(source_text, deepseek_text):
-                return deepseek_text
+                update_memory_entry(source_text, deepseek_text, section)
+                return deepseek_text, "deepseek"
         except Exception as e:
             print("deepseek preflight error:", e)
 
-    candidate = cleanup_translation(model_text)
+    candidate = cleanup_translation(apply_section_terms(model_text, section))
 
     if not candidate:
-        candidate = source_text
+        candidate = source_with_terms
 
     if not _looks_suspicious(source_text, candidate):
-        return candidate
+        update_memory_entry(source_text, candidate, section)
+        return candidate, "ollama"
 
-    retry_text = cleanup_translation(ollama_translate_one(source_text))
+    retry_text = cleanup_translation(apply_section_terms(ollama_translate_one(source_text), section))
     if not _looks_suspicious(source_text, retry_text):
-        return retry_text
+        update_memory_entry(source_text, retry_text, section)
+        return retry_text, "ollama_retry"
 
-    dict_fallback = cleanup_translation(apply_cad_dict(source_text))
+    dict_fallback = cleanup_translation(apply_section_terms(apply_cad_dict(source_text), section))
     short_label = len(source_text) <= 30
     if short_label and dict_fallback != source_text and not _looks_suspicious(source_text, dict_fallback):
-        return dict_fallback
+        update_memory_entry(source_text, dict_fallback, section)
+        return dict_fallback, "section_dict"
 
     if deepseek_available():
         try:
-            deepseek_text = cleanup_translation(deepseek_translate(source_text))
+            deepseek_text = cleanup_translation(apply_section_terms(deepseek_translate(source_text), section))
             if not _looks_suspicious(source_text, deepseek_text):
-                return deepseek_text
+                update_memory_entry(source_text, deepseek_text, section)
+                return deepseek_text, "deepseek"
         except Exception as e:
             print("deepseek error:", e)
 
     if short_label and dict_fallback != source_text:
-        return dict_fallback
+        update_memory_entry(source_text, dict_fallback, section)
+        return dict_fallback, "section_dict"
 
-    return retry_text if retry_text.strip() else candidate
+    final_value = retry_text if retry_text.strip() else candidate
+    update_memory_entry(source_text, final_value, section)
+    return final_value, "fallback"
 
 
 def translate_df(df):
     texts = df["text"].astype(str).tolist()
     texts = [t[:1200] for t in texts]
     translated = []
+    sources = []
     total = len(texts)
+    sections = [detect_section_for_text(text) for text in texts]
 
     max_len = max((len(t) for t in texts), default=0)
     avg_len = (sum(len(t) for t in texts) / len(texts)) if texts else 0
@@ -142,8 +159,11 @@ def translate_df(df):
             result = batch
 
         fixed = []
-        for source_text, model_text in zip(batch, result):
-            fixed.append(_translate_one(source_text, model_text))
+        batch_sections = sections[i : i + batch_size]
+        for source_text, model_text, section in zip(batch, result, batch_sections):
+            translated_text, source_name = _translate_one(source_text, model_text, section)
+            fixed.append(translated_text)
+            sources.append(source_name)
 
         translated.extend(fixed)
 
@@ -154,4 +174,6 @@ def translate_df(df):
             translated.append(df["text"].iloc[len(translated)])
 
     df["translated"] = translated
+    df["section"] = sections
+    df["translation_source"] = sources[: len(df)]
     return df
