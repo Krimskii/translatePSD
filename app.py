@@ -1,101 +1,80 @@
-import streamlit as st
-import pandas as pd
 import io
 import tempfile
 
-from translator_hybrid import translate_df
+import pandas as pd
+import streamlit as st
+
 from normalizer import normalize_df
-from validator import validate_df
 from parser_pdf import parse_pdf
-from writer_dxf import write_translated_dxf
+from translator_hybrid import translate_df
+from validator import validate_df
 from writer_dxf_blocks import write_translated_dxf
+
 
 st.title("AI локализатор ПСД Казахстан")
 
-file = st.file_uploader("Загрузить файл (Excel / PDF / DXF)")
+uploaded_file = st.file_uploader("Загрузить файл (Excel / PDF / DXF)")
 
-if file is not None:
+if uploaded_file is not None:
+    filename = uploaded_file.name.lower()
 
-    filename = file.name.lower()
+    if st.session_state.get("source_name") != uploaded_file.name:
+        st.session_state.pop("df", None)
+        st.session_state["source_name"] = uploaded_file.name
 
-    # -------- Excel --------
     if filename.endswith(".xlsx") or filename.endswith(".xls"):
-        df = pd.read_excel(file)
-
-    # -------- PDF --------
+        df = pd.read_excel(uploaded_file)
     elif filename.endswith(".pdf"):
-        df = parse_pdf(file)
-
-    # -------- DXF --------
+        df = parse_pdf(uploaded_file)
     elif filename.endswith(".dxf"):
-
-        from parser_dxf_block import extract_texts
         import ezdxf
+        from parser_dxf_block import extract_texts
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp:
-            tmp.write(file.read())
+            tmp.write(uploaded_file.read())
             tmp_path = tmp.name
 
         doc = ezdxf.readfile(tmp_path)
-
         texts = extract_texts(doc)
-
         df = pd.DataFrame(texts, columns=["handle", "text"])
-
     else:
         st.error("Поддерживаются Excel / PDF / DXF")
         st.stop()
 
-    # сохраняем исходный df один раз
     if "df" not in st.session_state:
-        st.session_state.df = df
+        st.session_state.df = df.copy()
 
-    # -------- ПЕРЕВОД --------
     if st.button("Перевести"):
         with st.spinner("Перевод..."):
-            st.session_state.df = translate_df(st.session_state.df)
+            st.session_state.df = translate_df(st.session_state.df.copy())
 
-    # -------- НОРМАЛИЗАЦИЯ --------
     if st.button("Нормализовать РК"):
         with st.spinner("Нормализация..."):
-            st.session_state.df = normalize_df(st.session_state.df)
+            st.session_state.df = normalize_df(st.session_state.df.copy())
 
-    # -------- ПРОВЕРКА --------
     if st.button("Проверить СН РК"):
         report = validate_df(st.session_state.df)
         st.dataframe(report)
 
-    # -------- ПРЕДПРОСМОТР --------
     st.dataframe(st.session_state.df)
 
-    # -------- СКАЧАТЬ --------
     buffer = io.BytesIO()
     st.session_state.df.to_excel(buffer, index=False)
 
     st.download_button(
-        label="Скачать",
+        label="Скачать Excel",
         data=buffer.getvalue(),
         file_name="result.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    # ---------- DXF EXPORT ----------
-    if filename.endswith(".dxf"):
+    if filename.endswith(".dxf") and st.button("Скачать DXF"):
+        output = tempfile.NamedTemporaryFile(delete=False, suffix=".dxf")
+        write_translated_dxf(tmp_path, output.name, st.session_state.df)
 
-        if st.button("Скачать DXF"):
-
-            output = tempfile.NamedTemporaryFile(delete=False, suffix=".dxf")
-
-            write_translated_dxf(
-                tmp_path,
-                output.name,
-                st.session_state.df
+        with open(output.name, "rb") as file:
+            st.download_button(
+                "Скачать переведенный DXF",
+                file.read(),
+                file_name="translated.dxf",
             )
-
-            with open(output.name, "rb") as f:
-
-                st.download_button(
-                    "Скачать переведенный DXF",
-                    f,
-                    file_name="translated.dxf"
-                )

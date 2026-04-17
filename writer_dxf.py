@@ -1,29 +1,25 @@
 import ezdxf
 
+from dxf_utils import pick_output_text
+
+
 def write_translated_dxf(input_path, output_path, df):
-
     doc = ezdxf.readfile(input_path)
-
     msp = doc.modelspace()
-
-    i = 0
+    index = 0
 
     for entity in msp:
+        if entity.dxftype() not in {"TEXT", "MTEXT"}:
+            continue
+        if index >= len(df):
+            break
+
+        new_text = pick_output_text(df.iloc[index])
+        index += 1
 
         if entity.dxftype() == "TEXT":
-
-            if i < len(df):
-
-                entity.dxf.text = str(df["normalized"].iloc[i])
-
-                i += 1
-
-        elif entity.dxftype() == "MTEXT":
-
-            if i < len(df):
-
-                entity.text = str(df["normalized"].iloc[i])
-
-                i += 1
+            entity.dxf.text = new_text
+        else:
+            entity.text = new_text
 
     doc.saveas(output_path)

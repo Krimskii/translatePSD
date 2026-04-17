@@ -1,11 +1,13 @@
+import os
+
 import requests
 
-MODEL = "qwen2.5:7b"
-OLLAMA_URL = "http://localhost:11434/api/generate"
+
+MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 
 
 def ollama_batch(texts):
-
     if not texts:
         return []
 
@@ -25,7 +27,6 @@ Rules:
 """
 
     try:
-
         response = requests.post(
             OLLAMA_URL,
             json={
@@ -36,27 +37,26 @@ Rules:
                     "temperature": 0,
                     "num_predict": 256,
                     "top_p": 1,
-                    "repeat_penalty": 1.1
-                }
+                    "repeat_penalty": 1.1,
+                },
             },
-            timeout=60
+            timeout=60,
         )
-
-        result = response.json()["response"]
+        response.raise_for_status()
+        payload = response.json()
+        result = str(payload.get("response", ""))
 
         translations = [t.strip() for t in result.split("@@@")]
-
         fixed = []
 
-        for i, t in enumerate(texts):
-
+        for i, text in enumerate(texts):
             if i < len(translations) and translations[i]:
                 fixed.append(translations[i])
             else:
-                fixed.append(t)
+                fixed.append(text)
 
         return fixed
 
     except Exception as e:
-        print("Ошибка:", e)
+        print("Ошибка Ollama:", e)
         return texts

@@ -1,0 +1,9 @@
+ezdxf
+matplotlib
+opencv-python
+pandas
+pdfplumber
+python-docx
+requests
+streamlit
+paddleocr
