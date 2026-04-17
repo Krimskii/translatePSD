@@ -8,6 +8,7 @@ from dwg_utils import convert_dwg_to_dxf, find_dwg_converter
 from normative_dictionary import DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH
 from normative_dictionary import sync_normative_candidates
 from normalizer import normalize_df
+from output_names import build_ru_name
 from parser_docx import parse_docx
 from parser_pdf import parse_pdf
 from translator_hybrid import translate_df
@@ -90,7 +91,7 @@ if uploaded_file is not None:
         st.download_button(
             label="Скачать Excel",
             data=buffer.getvalue(),
-            file_name="result.xlsx",
+            file_name=build_ru_name(uploaded_file.name, output_ext=".xlsx"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     except ModuleNotFoundError as exc:
@@ -100,7 +101,7 @@ if uploaded_file is not None:
             st.download_button(
                 label="Скачать CSV",
                 data=csv_data,
-                file_name="result.csv",
+                file_name=build_ru_name(uploaded_file.name, output_ext=".csv"),
                 mime="text/csv",
             )
         else:
@@ -114,7 +115,7 @@ if uploaded_file is not None:
             st.download_button(
                 "Скачать переведенный DXF",
                 file.read(),
-                file_name="translated.dxf",
+                file_name=build_ru_name(uploaded_file.name, output_ext=".dxf"),
             )
 
     if filename.endswith(".docx") and st.button("Скачать DOCX"):
@@ -129,7 +130,7 @@ if uploaded_file is not None:
             st.download_button(
                 "Скачать переведенный DOCX",
                 file.read(),
-                file_name="translated.docx",
+                file_name=build_ru_name(uploaded_file.name, output_ext=".docx"),
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
@@ -146,6 +147,6 @@ if uploaded_file is not None:
             st.download_button(
                 "Скачать переведенный PDF",
                 file.read(),
-                file_name="translated.pdf",
+                file_name=build_ru_name(uploaded_file.name, output_ext=".pdf"),
                 mime="application/pdf",
             )
