@@ -8,8 +8,13 @@ from pathlib import Path
 def _candidate_paths():
     program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
     program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    env_path = os.environ.get("DWG_CONVERTER_PATH", "").strip()
+    project_root = Path(__file__).resolve().parent
 
-    return [
+    paths = [
+        env_path,
+        str(project_root / "tools" / "dwg2dxf.exe"),
+        str(project_root / "tools" / "dwg2dxf"),
         "dwg2dxf",
         "ODAFileConverter",
         "ODAFileConverter.exe",
@@ -22,6 +27,8 @@ def _candidate_paths():
         os.path.join(program_files, "Teigha File Converter", "TeighaFileConverter.exe"),
         os.path.join(program_files_x86, "Teigha File Converter", "TeighaFileConverter.exe"),
     ]
+
+    return [path for path in paths if path]
 
 
 def find_dwg_converter():
@@ -36,7 +43,8 @@ def get_dwg_converter_help():
     return (
         "Для работы с DWG нужен внешний конвертер. "
         "Установите ODA File Converter или dwg2dxf, затем перезапустите приложение. "
-        "Если конвертер уже установлен, добавьте его в PATH или установите в стандартную папку Program Files."
+        "Можно также задать путь через переменную DWG_CONVERTER_PATH "
+        "или положить dwg2dxf.exe в папку tools рядом с проектом."
     )
 
 

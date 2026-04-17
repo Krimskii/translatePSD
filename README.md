@@ -43,6 +43,7 @@ pip install -r requirements.txt
 - `OLLAMA_MODEL`
 - `TRANSLATION_MEMORY_PATH`
 - `NORMATIVE_DICTIONARY_PATH`
+- `DWG_CONVERTER_PATH`
 
 ## Запуск
 
@@ -106,6 +107,7 @@ translate_project("source_dir", "output_dir")
 - Для OCR нужны установленные зависимости `paddleocr` и `opencv-python`.
 - Для OCR fallback в DXF перевод добавляется поверх исходной графики; для сложных чертежей может потребоваться ручная доводка размеров текста.
 - Для работы с DWG нужен установленный `ODA File Converter` или `dwg2dxf`.
+- Для `dwg2dxf` можно либо добавить его в `PATH`, либо указать абсолютный путь в `DWG_CONVERTER_PATH`, либо положить `dwg2dxf.exe` в папку `tools` рядом с проектом.
 - Если конвертер не найден, интерфейс покажет понятное сообщение вместо traceback; после установки конвертера перезапустите приложение.
 - В пакетном режиме `DWG` сохраняется как переведенный `*_RU.dxf`.
 - Без работающего Ollama переводчик вернёт исходный текст как fallback.
