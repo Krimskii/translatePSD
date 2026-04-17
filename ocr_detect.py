@@ -12,18 +12,19 @@ _OCR = None
 def _build_ocr_instance():
     from paddleocr import PaddleOCR
 
-    base_kwargs = {"use_angle_cls": True, "lang": "ch"}
     attempts = [
-        {**base_kwargs, "show_log": False},
-        dict(base_kwargs),
+        {"use_textline_orientation": True, "lang": "ch", "ocr_version": "PP-OCRv5"},
+        {"use_textline_orientation": True, "lang": "ch"},
+        {"use_angle_cls": True, "lang": "ch"},
     ]
 
     last_error = None
     for kwargs in attempts:
-        try:
-            return PaddleOCR(**kwargs)
-        except (TypeError, ValueError) as exc:
-            last_error = exc
+        for candidate in (dict(kwargs, show_log=False), dict(kwargs)):
+            try:
+                return PaddleOCR(**candidate)
+            except (TypeError, ValueError) as exc:
+                last_error = exc
 
     if last_error is not None:
         raise last_error
@@ -109,9 +110,9 @@ def _extract_new_style_lines(result):
         if not isinstance(item, dict):
             continue
 
-        polys = item.get("dt_polys") or []
+        polys = item.get("rec_polys") or item.get("dt_polys") or item.get("rec_boxes") or []
         texts = item.get("rec_texts") or []
-        scores = item.get("rec_scores") or []
+        scores = item.get("rec_scores") or [1.0] * len(texts)
 
         for bbox, text, score in zip(polys, texts, scores):
             try:
@@ -146,6 +147,22 @@ def _prepare_images(img):
     return variants
 
 
+def _run_ocr(image):
+    ocr = _get_ocr()
+
+    if hasattr(ocr, "predict"):
+        try:
+            return ocr.predict(
+                image,
+                use_textline_orientation=True,
+                text_rec_score_thresh=0.2,
+            )
+        except TypeError:
+            pass
+
+    return ocr.ocr(image, cls=True)
+
+
 def detect_text_boxes(img_path):
     img = cv2.imread(img_path)
     if img is None:
@@ -160,7 +177,7 @@ def detect_text_boxes(img_path):
 
     raw_lines = []
     for prepared in _prepare_images(img):
-        result = _get_ocr().ocr(prepared, cls=True)
+        result = _run_ocr(prepared)
         raw_lines = _extract_lines(result)
         if raw_lines:
             break
@@ -173,7 +190,7 @@ def detect_text_boxes(img_path):
         if scale != 1.0:
             bbox = (np.array(bbox, dtype=float) / scale).tolist()
 
-        if score < 0.45 or not text:
+        if score < 0.2 or not text:
             continue
 
         bounds = _bbox_bounds(bbox)
