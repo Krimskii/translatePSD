@@ -5,7 +5,6 @@ import pandas as pd
 import streamlit as st
 
 from batch_processing import build_batch_zip, process_uploaded_file
-from dwg_utils import convert_dwg_to_dxf, find_dwg_converter, get_dwg_converter_help
 from normative_dictionary import DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH
 from normative_dictionary import sync_normative_candidates
 from normalizer import normalize_df
@@ -24,9 +23,10 @@ st.caption(
     f"Нормативный словарь РК: `{NORMATIVE_DICTIONARY_PATH}`. "
     "Лист `approved_terms` хранит утвержденные термины, лист `candidates` пополняется автоматически."
 )
+st.caption("Для CAD загружайте `DXF`. Если исходник в `DWG`, сохраните его в AutoCAD как `DXF`.")
 
 uploaded_files = st.file_uploader(
-    "Загрузить файл (Excel / PDF / DOCX / DXF / DWG)",
+    "Загрузить файл (Excel / PDF / DOCX / DXF)",
     accept_multiple_files=True,
 )
 
@@ -103,40 +103,24 @@ if uploaded_files:
             df = pd.DataFrame({"text": texts})
         elif filename.endswith(".pdf"):
             df = parse_pdf(uploaded_file)
-        elif filename.endswith(".dxf") or filename.endswith(".dwg"):
+        elif filename.endswith(".dxf"):
             import ezdxf
             from parser_dxf_block import extract_texts
 
-            source_suffix = ".dwg" if filename.endswith(".dwg") else ".dxf"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=source_suffix) as tmp:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp:
                 tmp.write(uploaded_file.read())
-                source_tmp_path = tmp.name
-
-            if filename.endswith(".dwg"):
-                tmp_dxf = tempfile.NamedTemporaryFile(delete=False, suffix=".dxf")
-                tmp_dxf.close()
-                try:
-                    convert_dwg_to_dxf(source_tmp_path, tmp_dxf.name)
-                except RuntimeError as exc:
-                    st.error(str(exc))
-                    st.stop()
-                tmp_path = tmp_dxf.name
-            else:
-                tmp_path = source_tmp_path
+                tmp_path = tmp.name
 
             doc = ezdxf.readfile(tmp_path)
             texts = extract_texts(doc)
             df = pd.DataFrame(texts, columns=["handle", "text"])
         else:
-            st.error("Поддерживаются Excel / PDF / DOCX / DXF / DWG")
+            st.error("Поддерживаются Excel / PDF / DOCX / DXF")
             st.stop()
 
         if "df" not in st.session_state:
             st.session_state.df = df.copy()
             sync_normative_candidates(st.session_state.df)
-
-        if filename.endswith(".dwg") and not find_dwg_converter():
-            st.warning(get_dwg_converter_help())
 
         if st.button("Перевести"):
             with st.spinner("Перевод..."):
@@ -174,7 +158,7 @@ if uploaded_files:
             else:
                 raise
 
-        if (filename.endswith(".dxf") or filename.endswith(".dwg")) and st.button("Скачать DXF"):
+        if filename.endswith(".dxf") and st.button("Скачать DXF"):
             output = tempfile.NamedTemporaryFile(delete=False, suffix=".dxf")
             write_translated_dxf(tmp_path, output.name, st.session_state.df)
 

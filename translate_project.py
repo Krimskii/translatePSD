@@ -1,8 +1,6 @@
 import os
 import shutil
-import tempfile
 
-from dwg_utils import convert_dwg_to_dxf
 from output_names import build_ru_name
 from translate_docx import translate_docx
 from translate_dxf import translate_dxf
@@ -31,12 +29,6 @@ def translate_project(root, out):
                     translate_docx(src, dst)
                 elif ext.endswith(".xlsx") or ext.endswith(".xls"):
                     translate_excel(src, dst)
-                elif ext.endswith(".dwg"):
-                    dst = os.path.join(out_dir, build_ru_name(file_name, output_ext=".dxf"))
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_dxf:
-                        tmp_dxf_path = tmp_dxf.name
-                    convert_dwg_to_dxf(src, tmp_dxf_path)
-                    translate_dxf(tmp_dxf_path, dst)
                 elif ext.endswith(".dxf"):
                     translate_dxf(src, dst)
                 else:

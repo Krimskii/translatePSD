@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from dwg_utils import convert_dwg_to_dxf
 from normalizer import normalize_df
 from output_names import build_ru_name
 from parser_docx import parse_docx
@@ -88,17 +87,10 @@ def process_uploaded_file(uploaded_file, *, normalize=True, validate=True):
         elif suffix in {".docx", ".pdf"}:
             df = _prepare_document_dataframe(uploaded_file, suffix)
             output_ext = suffix
-        elif suffix in {".dxf", ".dwg"}:
-            source_suffix = ".dwg" if suffix == ".dwg" else ".dxf"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=source_suffix) as tmp:
+        elif suffix == ".dxf":
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp:
                 tmp.write(uploaded_file.getvalue())
                 source_tmp_path = tmp.name
-
-            if suffix == ".dwg":
-                tmp_dxf = tempfile.NamedTemporaryFile(delete=False, suffix=".dxf")
-                tmp_dxf.close()
-                convert_dwg_to_dxf(source_tmp_path, tmp_dxf.name)
-                source_tmp_path = tmp_dxf.name
 
             df = _prepare_dxf_dataframe(source_tmp_path)
             output_ext = ".dxf"
@@ -137,7 +129,7 @@ def process_uploaded_file(uploaded_file, *, normalize=True, validate=True):
     except Exception as exc:
         return {
             "file_name": original_name,
-            "output_name": build_ru_name(original_name, output_ext=".dxf" if suffix == ".dwg" else None),
+            "output_name": build_ru_name(original_name),
             "status": "ERROR",
             "rows": 0,
             "warnings": 0,
