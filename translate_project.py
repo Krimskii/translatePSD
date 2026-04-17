@@ -1,6 +1,7 @@
 import os
 import shutil
 
+from dwg_utils import convert_dwg_to_dxf
 from translate_docx import translate_docx
 from translate_dxf import translate_dxf
 from translate_excel import translate_excel
@@ -27,6 +28,9 @@ def translate_project(root, out):
                     translate_docx(src, dst)
                 elif ext.endswith(".xlsx") or ext.endswith(".xls"):
                     translate_excel(src, dst)
+                elif ext.endswith(".dwg"):
+                    dst = os.path.splitext(dst)[0] + ".dxf"
+                    convert_dwg_to_dxf(src, dst)
                 elif ext.endswith(".dxf"):
                     translate_dxf(src, dst)
                 else:

@@ -4,18 +4,20 @@ import tempfile
 import pandas as pd
 import streamlit as st
 
+from dwg_utils import convert_dwg_to_dxf, find_dwg_converter
 from normalizer import normalize_df
 from parser_docx import parse_docx
 from parser_pdf import parse_pdf
 from translator_hybrid import translate_df
 from translate_docx import apply_docx_dataframe
+from translate_pdf import translate_pdf
 from validator import validate_df
 from writer_dxf_blocks import write_translated_dxf
 
 
 st.title("AI локализатор ПСД Казахстан")
 
-uploaded_file = st.file_uploader("Загрузить файл (Excel / PDF / DOCX / DXF)")
+uploaded_file = st.file_uploader("Загрузить файл (Excel / PDF / DOCX / DXF / DWG)")
 
 if uploaded_file is not None:
     filename = uploaded_file.name.lower()
@@ -31,23 +33,35 @@ if uploaded_file is not None:
         df = pd.DataFrame({"text": texts})
     elif filename.endswith(".pdf"):
         df = parse_pdf(uploaded_file)
-    elif filename.endswith(".dxf"):
+    elif filename.endswith(".dxf") or filename.endswith(".dwg"):
         import ezdxf
         from parser_dxf_block import extract_texts
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp:
+        source_suffix = ".dwg" if filename.endswith(".dwg") else ".dxf"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=source_suffix) as tmp:
             tmp.write(uploaded_file.read())
-            tmp_path = tmp.name
+            source_tmp_path = tmp.name
+
+        if filename.endswith(".dwg"):
+            tmp_dxf = tempfile.NamedTemporaryFile(delete=False, suffix=".dxf")
+            tmp_dxf.close()
+            convert_dwg_to_dxf(source_tmp_path, tmp_dxf.name)
+            tmp_path = tmp_dxf.name
+        else:
+            tmp_path = source_tmp_path
 
         doc = ezdxf.readfile(tmp_path)
         texts = extract_texts(doc)
         df = pd.DataFrame(texts, columns=["handle", "text"])
     else:
-        st.error("Поддерживаются Excel / PDF / DOCX / DXF")
+        st.error("Поддерживаются Excel / PDF / DOCX / DXF / DWG")
         st.stop()
 
     if "df" not in st.session_state:
         st.session_state.df = df.copy()
+
+    if filename.endswith(".dwg") and not find_dwg_converter():
+        st.warning("Для работы с DWG нужен установленный ODA File Converter или dwg2dxf.")
 
     if st.button("Перевести"):
         with st.spinner("Перевод..."):
@@ -85,7 +99,7 @@ if uploaded_file is not None:
         else:
             raise
 
-    if filename.endswith(".dxf") and st.button("Скачать DXF"):
+    if (filename.endswith(".dxf") or filename.endswith(".dwg")) and st.button("Скачать DXF"):
         output = tempfile.NamedTemporaryFile(delete=False, suffix=".dxf")
         write_translated_dxf(tmp_path, output.name, st.session_state.df)
 
@@ -110,4 +124,21 @@ if uploaded_file is not None:
                 file.read(),
                 file_name="translated.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+
+    if filename.endswith(".pdf") and st.button("Скачать PDF"):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as source_tmp:
+            source_tmp.write(uploaded_file.getvalue())
+            source_path = source_tmp.name
+
+        output = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        output.close()
+        translate_pdf(source_path, output.name)
+
+        with open(output.name, "rb") as file:
+            st.download_button(
+                "Скачать переведенный PDF",
+                file.read(),
+                file_name="translated.pdf",
+                mime="application/pdf",
             )
