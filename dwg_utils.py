@@ -17,6 +17,10 @@ def _candidate_paths():
         "TeighaFileConverter.exe",
         os.path.join(program_files, "ODA", "ODAFileConverter", "ODAFileConverter.exe"),
         os.path.join(program_files_x86, "ODA", "ODAFileConverter", "ODAFileConverter.exe"),
+        os.path.join(program_files, "ODAFileConverter", "ODAFileConverter.exe"),
+        os.path.join(program_files_x86, "ODAFileConverter", "ODAFileConverter.exe"),
+        os.path.join(program_files, "Teigha File Converter", "TeighaFileConverter.exe"),
+        os.path.join(program_files_x86, "Teigha File Converter", "TeighaFileConverter.exe"),
     ]
 
 
@@ -28,12 +32,18 @@ def find_dwg_converter():
     return None
 
 
+def get_dwg_converter_help():
+    return (
+        "Для работы с DWG нужен внешний конвертер. "
+        "Установите ODA File Converter или dwg2dxf, затем перезапустите приложение. "
+        "Если конвертер уже установлен, добавьте его в PATH или установите в стандартную папку Program Files."
+    )
+
+
 def convert_dwg_to_dxf(src, dst):
     converter = find_dwg_converter()
     if not converter:
-        raise RuntimeError(
-            "Не найден конвертер DWG. Установите ODA File Converter или dwg2dxf и повторите."
-        )
+        raise RuntimeError(get_dwg_converter_help())
 
     converter_name = Path(converter).name.lower()
 

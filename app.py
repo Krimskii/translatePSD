@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from batch_processing import build_batch_zip, process_uploaded_file
-from dwg_utils import convert_dwg_to_dxf, find_dwg_converter
+from dwg_utils import convert_dwg_to_dxf, find_dwg_converter, get_dwg_converter_help
 from normative_dictionary import DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH
 from normative_dictionary import sync_normative_candidates
 from normalizer import normalize_df
@@ -115,7 +115,11 @@ if uploaded_files:
             if filename.endswith(".dwg"):
                 tmp_dxf = tempfile.NamedTemporaryFile(delete=False, suffix=".dxf")
                 tmp_dxf.close()
-                convert_dwg_to_dxf(source_tmp_path, tmp_dxf.name)
+                try:
+                    convert_dwg_to_dxf(source_tmp_path, tmp_dxf.name)
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                    st.stop()
                 tmp_path = tmp_dxf.name
             else:
                 tmp_path = source_tmp_path
@@ -132,7 +136,7 @@ if uploaded_files:
             sync_normative_candidates(st.session_state.df)
 
         if filename.endswith(".dwg") and not find_dwg_converter():
-            st.warning("Для работы с DWG нужен установленный ODA File Converter или dwg2dxf.")
+            st.warning(get_dwg_converter_help())
 
         if st.button("Перевести"):
             with st.spinner("Перевод..."):
