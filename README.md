@@ -45,6 +45,26 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+### Быстрый запуск на Windows
+
+Если проект клонирован через `git clone`, можно запускать так:
+
+```powershell
+.\run.ps1
+```
+
+С обновлением из GitHub перед запуском:
+
+```powershell
+.\update_and_run.ps1
+```
+
+Или двойным кликом по:
+
+```text
+start.bat
+```
+
 ### DXF
 
 ```powershell
