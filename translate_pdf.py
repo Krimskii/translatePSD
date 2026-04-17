@@ -1,6 +1,7 @@
 import fitz
 import pandas as pd
 
+from dxf_utils import pick_output_text
 from pdf_utils import extract_pdf_blocks, fit_textbox
 from translator_hybrid import translate_df
 
@@ -27,7 +28,7 @@ def _safe_insert(page, rect, text, block):
         )
 
 
-def translate_pdf(src, dst):
+def apply_pdf_dataframe(src, dst, df):
     blocks = extract_pdf_blocks(src)
     if not blocks:
         doc = fitz.open(src)
@@ -37,9 +38,9 @@ def translate_pdf(src, dst):
             doc.close()
         return dst
 
-    df = pd.DataFrame({"text": [block.text for block in blocks]})
-    df = translate_df(df)
-    translations = df["translated"].tolist()
+    translations = [pick_output_text(df.iloc[i]) for i in range(min(len(blocks), len(df)))]
+    if len(translations) < len(blocks):
+        translations.extend([block.text for block in blocks[len(translations) :]])
 
     doc = fitz.open(src)
 
@@ -68,3 +69,10 @@ def translate_pdf(src, dst):
         doc.close()
 
     return dst
+
+
+def translate_pdf(src, dst):
+    blocks = extract_pdf_blocks(src)
+    df = pd.DataFrame({"text": [block.text for block in blocks]})
+    df = translate_df(df)
+    return apply_pdf_dataframe(src, dst, df)

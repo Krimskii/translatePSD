@@ -13,7 +13,7 @@ from parser_docx import parse_docx
 from parser_pdf import parse_pdf
 from translator_hybrid import translate_df
 from translate_docx import apply_docx_dataframe
-from translate_pdf import translate_pdf
+from translate_pdf import apply_pdf_dataframe
 from validator import validate_df
 from writer_dxf_blocks import write_translated_dxf
 
@@ -141,7 +141,7 @@ if uploaded_file is not None:
 
         output = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         output.close()
-        translate_pdf(source_path, output.name)
+        apply_pdf_dataframe(source_path, output.name, st.session_state.df)
 
         with open(output.name, "rb") as file:
             st.download_button(
