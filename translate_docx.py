@@ -1,5 +1,6 @@
 import pandas as pd
 from docx import Document
+from docx.shared import Pt
 
 from dxf_utils import pick_output_text
 from parser_docx import iter_docx_text_containers
@@ -54,6 +55,70 @@ def _replace_in_primary_run(runs, visible_indices, text):
         runs[idx].text = ""
 
 
+def _average_font_size(runs, visible_indices):
+    sizes = []
+
+    for idx in visible_indices:
+        size = runs[idx].font.size
+        if size is not None:
+            try:
+                sizes.append(float(size.pt))
+            except Exception:
+                continue
+
+    return sum(sizes) / len(sizes) if sizes else 10.0
+
+
+def _split_long_text(text):
+    value = str(text).strip()
+    if "\n" in value or len(value) < 42:
+        return value
+
+    separators = [", ", "; ", ": ", " - ", " ("]
+    midpoint = len(value) // 2
+    best = None
+    best_distance = None
+
+    for separator in separators:
+        start = 0
+        while True:
+            index = value.find(separator, start)
+            if index < 0:
+                break
+
+            split_at = index + len(separator.rstrip())
+            distance = abs(split_at - midpoint)
+            if best is None or distance < best_distance:
+                best = split_at
+                best_distance = distance
+
+            start = index + 1
+
+    if best is None:
+        spaces = [idx for idx, char in enumerate(value) if char == " "]
+        if spaces:
+            best = min(spaces, key=lambda idx: abs(idx - midpoint))
+
+    if best is None or best <= 0 or best >= len(value) - 1:
+        return value
+
+    return f"{value[:best].rstrip()}\n{value[best:].lstrip()}"
+
+
+def _apply_compact_layout(paragraph, runs, visible_indices, text, total_len):
+    compact_text = _split_long_text(text)
+    _replace_in_primary_run(runs, visible_indices, compact_text)
+
+    base_size = _average_font_size(runs, visible_indices)
+    length_ratio = max(len(compact_text.replace("\n", " ")), 1) / max(total_len, 1)
+    target_size = max(min(base_size / min(max(length_ratio, 1.0), 1.8), base_size), 7.0)
+    runs[visible_indices[0]].font.size = Pt(target_size)
+
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.line_spacing = 1.0
+
+
 def _apply_to_runs(paragraph, text):
     runs = paragraph.runs
     text = cleanup_translation(text)
@@ -79,7 +144,7 @@ def _apply_to_runs(paragraph, text):
     dense_table_text = " " in text and len(text.split()) >= 3 and len(visible_indices) >= 3
 
     if fragmented_layout or expanded_translation or dense_table_text:
-        _replace_in_primary_run(runs, visible_indices, text)
+        _apply_compact_layout(paragraph, runs, visible_indices, text, total_len)
         return
 
     remaining = text
