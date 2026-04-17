@@ -5,15 +5,17 @@ import pandas as pd
 import streamlit as st
 
 from normalizer import normalize_df
+from parser_docx import parse_docx
 from parser_pdf import parse_pdf
 from translator_hybrid import translate_df
+from translate_docx import apply_docx_dataframe
 from validator import validate_df
 from writer_dxf_blocks import write_translated_dxf
 
 
 st.title("AI локализатор ПСД Казахстан")
 
-uploaded_file = st.file_uploader("Загрузить файл (Excel / PDF / DXF)")
+uploaded_file = st.file_uploader("Загрузить файл (Excel / PDF / DOCX / DXF)")
 
 if uploaded_file is not None:
     filename = uploaded_file.name.lower()
@@ -24,6 +26,9 @@ if uploaded_file is not None:
 
     if filename.endswith(".xlsx") or filename.endswith(".xls"):
         df = pd.read_excel(uploaded_file)
+    elif filename.endswith(".docx"):
+        texts = parse_docx(uploaded_file)
+        df = pd.DataFrame({"text": texts})
     elif filename.endswith(".pdf"):
         df = parse_pdf(uploaded_file)
     elif filename.endswith(".dxf"):
@@ -38,7 +43,7 @@ if uploaded_file is not None:
         texts = extract_texts(doc)
         df = pd.DataFrame(texts, columns=["handle", "text"])
     else:
-        st.error("Поддерживаются Excel / PDF / DXF")
+        st.error("Поддерживаются Excel / PDF / DOCX / DXF")
         st.stop()
 
     if "df" not in st.session_state:
@@ -89,4 +94,20 @@ if uploaded_file is not None:
                 "Скачать переведенный DXF",
                 file.read(),
                 file_name="translated.dxf",
+            )
+
+    if filename.endswith(".docx") and st.button("Скачать DOCX"):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as source_tmp:
+            source_tmp.write(uploaded_file.getvalue())
+            source_path = source_tmp.name
+
+        output = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+        apply_docx_dataframe(source_path, output.name, st.session_state.df)
+
+        with open(output.name, "rb") as file:
+            st.download_button(
+                "Скачать переведенный DOCX",
+                file.read(),
+                file_name="translated.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )

@@ -1,62 +1,51 @@
-from docx import Document
 import pandas as pd
-import re
+from docx import Document
 
+from dxf_utils import pick_output_text
+from post_translate_fix import cleanup_translation, has_chinese
 from translator_hybrid import translate_df
 
 
-# словарь ПСД fallback
-DICT = {
-    "设备":"оборудование",
-    "布置":"расстановка",
-    "工艺":"технология",
-    "流程":"схема",
-    "车间":"цех",
-    "铝材":"алюминиевый профиль",
-    "说明":"описание",
-    "结构":"конструкции",
-    "总平面":"генеральный план",
-    "目录":"содержание",
-    "电气":"электрика",
-    "给排水":"водоснабжение и канализация"
+DOCX_FALLBACK_DICT = {
+    "设备": "оборудование",
+    "布置": "расстановка",
+    "工艺": "технология",
+    "流程": "схема",
+    "车间": "цех",
+    "铝材": "алюминиевый профиль",
+    "说明": "описание",
+    "结构": "конструкции",
+    "总平面": "генеральный план",
+    "目录": "содержание",
+    "电气": "электрика",
+    "给排水": "водоснабжение и канализация",
 }
 
 
-def has_chinese(text):
-    return re.search(r'[\u4e00-\u9fff]', str(text))
-
-
 def fallback(text):
-
-    t = str(text)
-
-    for k,v in DICT.items():
-        t = t.replace(k,v)
-
-    return t
+    value = str(text)
+    for source, target in DOCX_FALLBACK_DICT.items():
+        value = value.replace(source, target)
+    return cleanup_translation(value)
 
 
 def fix_spaced_text(text):
-
-    t = str(text)
-
-    parts = t.split(" ")
+    value = str(text)
+    parts = value.split(" ")
 
     if len(parts) > 8:
         short = [p for p in parts if len(p) <= 2]
-
         if len(short) > len(parts) * 0.6:
             return "".join(parts)
 
-    return t
+    return value
 
 
 def collect(doc):
-
     texts = []
 
-    for p in doc.paragraphs:
-        texts.append(fix_spaced_text(p.text))
+    for paragraph in doc.paragraphs:
+        texts.append(fix_spaced_text(paragraph.text))
 
     for table in doc.tables:
         for row in table.rows:
@@ -67,62 +56,46 @@ def collect(doc):
 
 
 def apply(doc, translated):
+    index = 0
 
-    i = 0
-
-    for p in doc.paragraphs:
-
-        if i < len(translated):
-            p.text = translated[i]
-
-        i += 1
+    for paragraph in doc.paragraphs:
+        if index < len(translated):
+            paragraph.text = translated[index]
+        index += 1
 
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
+                if index < len(translated):
+                    cell.text = translated[index]
+                index += 1
 
-                if i < len(translated):
-                    cell.text = translated[i]
 
-                i += 1
+def apply_docx_dataframe(src, dst, df):
+    doc = Document(src)
+    translated = [pick_output_text(df.iloc[i]) for i in range(len(df))]
+    apply(doc, translated)
+    doc.save(dst)
 
 
 def translate_docx(src, dst):
-
     print("translate:", src)
 
     doc = Document(src)
-
     texts = collect(doc)
-
     df = pd.DataFrame({"text": texts})
-
-    # первый проход
     df = translate_df(df)
 
-    translated = df["translated"].tolist()
-
-    # второй проход — добить китайский
     fixed = []
+    for text in df["translated"].tolist():
+        value = cleanup_translation(text)
 
-    for i,t in enumerate(translated):
+        if has_chinese(value):
+            value = fallback(value)
 
-        if has_chinese(t):
-
-            t = fallback(t)
-
-            # если всё еще китайский — ещё раз через модель
-            if has_chinese(t):
-
-                df2 = pd.DataFrame({"text":[t]})
-                df2 = translate_df(df2)
-
-                t = df2["translated"][0]
-
-        fixed.append(t)
+        fixed.append(value)
 
     apply(doc, fixed)
-
     doc.save(dst)
 
     print("saved:", dst)
