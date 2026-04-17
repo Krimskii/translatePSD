@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
 
 import fitz
@@ -63,6 +64,61 @@ def _block_alignment(block_bbox, line_bbox):
     return fitz.TEXT_ALIGN_LEFT
 
 
+def _ocr_blocks_from_page(page: fitz.Page, page_index: int):
+    try:
+        from ocr_detect import detect_text_boxes
+    except Exception:
+        return []
+
+    matrix = fitz.Matrix(2, 2)
+    pix = page.get_pixmap(matrix=matrix, alpha=False)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        tmp.write(pix.tobytes("png"))
+        image_path = tmp.name
+
+    try:
+        ocr_boxes = detect_text_boxes(image_path)
+    finally:
+        try:
+            import os
+
+            os.unlink(image_path)
+        except Exception:
+            pass
+
+    blocks = []
+    scale_x = max(pix.width / max(page.rect.width, 1), 1)
+    scale_y = max(pix.height / max(page.rect.height, 1), 1)
+
+    for item in ocr_boxes:
+        text = str(item.get("text", "")).strip()
+        if not text:
+            continue
+
+        x0, y0, x1, y1 = item["bbox"][0][0], item["bbox"][0][1], item["bbox"][2][0], item["bbox"][2][1]
+        bbox = (
+            float(x0) / scale_x,
+            float(y0) / scale_y,
+            float(x1) / scale_x,
+            float(y1) / scale_y,
+        )
+        height = max(bbox[3] - bbox[1], 6.0)
+
+        blocks.append(
+            PdfTextBlock(
+                page_index=page_index,
+                bbox=bbox,
+                text=text,
+                font_size=max(height * 0.65, 7.0),
+                color=(0, 0, 0),
+                align=fitz.TEXT_ALIGN_LEFT,
+            )
+        )
+
+    return blocks
+
+
 def extract_pdf_blocks(src) -> list[PdfTextBlock]:
     doc = open_pdf_document(src)
     blocks: list[PdfTextBlock] = []
@@ -70,6 +126,7 @@ def extract_pdf_blocks(src) -> list[PdfTextBlock]:
     try:
         for page_index, page in enumerate(doc):
             page_dict = page.get_text("dict")
+            page_blocks: list[PdfTextBlock] = []
 
             for block in page_dict.get("blocks", []):
                 if block.get("type") != 0:
@@ -108,7 +165,7 @@ def extract_pdf_blocks(src) -> list[PdfTextBlock]:
                 font_size = max(sum(sizes) / len(sizes), 6.0) if sizes else 10.0
                 color = colors[0] if colors else (0, 0, 0)
 
-                blocks.append(
+                page_blocks.append(
                     PdfTextBlock(
                         page_index=page_index,
                         bbox=bbox,
@@ -118,6 +175,11 @@ def extract_pdf_blocks(src) -> list[PdfTextBlock]:
                         align=align,
                     )
                 )
+
+            if not page_blocks:
+                page_blocks.extend(_ocr_blocks_from_page(page, page_index))
+
+            blocks.extend(page_blocks)
     finally:
         doc.close()
 

@@ -135,6 +135,12 @@ if uploaded_files:
         if "df" not in st.session_state:
             st.session_state.df = df.copy()
 
+        if filename.endswith(".pdf") and st.session_state.df.empty:
+            st.warning(
+                "PDF не дал текстовых блоков даже после OCR. "
+                "Вероятно, это сложный скан или качество страниц слишком низкое для распознавания."
+            )
+
         if st.button("Перевести"):
             with st.spinner("Перевод..."):
                 st.session_state.df = translate_df(st.session_state.df.copy())
