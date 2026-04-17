@@ -1,6 +1,7 @@
 ezdxf
 matplotlib
 opencv-python
+openpyxl
 pandas
 pdfplumber
 pymupdf

@@ -58,15 +58,27 @@ if uploaded_file is not None:
 
     st.dataframe(st.session_state.df)
 
-    buffer = io.BytesIO()
-    st.session_state.df.to_excel(buffer, index=False)
-
-    st.download_button(
-        label="Скачать Excel",
-        data=buffer.getvalue(),
-        file_name="result.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    try:
+        buffer = io.BytesIO()
+        st.session_state.df.to_excel(buffer, index=False)
+        st.download_button(
+            label="Скачать Excel",
+            data=buffer.getvalue(),
+            file_name="result.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name == "openpyxl":
+            st.warning("Для выгрузки в Excel нужен пакет openpyxl. Пока доступна выгрузка в CSV.")
+            csv_data = st.session_state.df.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                label="Скачать CSV",
+                data=csv_data,
+                file_name="result.csv",
+                mime="text/csv",
+            )
+        else:
+            raise
 
     if filename.endswith(".dxf") and st.button("Скачать DXF"):
         output = tempfile.NamedTemporaryFile(delete=False, suffix=".dxf")
