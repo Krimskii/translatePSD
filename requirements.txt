@@ -3,6 +3,7 @@ matplotlib
 opencv-python
 pandas
 pdfplumber
+pymupdf
 python-docx
 requests
 streamlit

@@ -19,4 +19,13 @@ def render_dxf_to_png(src, dst, dpi=300):
     ax.axis('off')
 
     fig.savefig(dst, dpi=dpi, bbox_inches='tight', pad_inches=0)
+    fig.canvas.draw()
+
+    metadata = {
+        "xlim": tuple(float(v) for v in ax.get_xlim()),
+        "ylim": tuple(float(v) for v in ax.get_ylim()),
+        "image_size": tuple(int(v) for v in fig.canvas.get_width_height()),
+    }
+
     plt.close(fig)
+    return metadata

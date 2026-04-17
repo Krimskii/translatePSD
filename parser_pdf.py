@@ -1,14 +1,8 @@
-import pdfplumber
 import pandas as pd
 
+from pdf_utils import extract_pdf_blocks
+
 def parse_pdf(file):
-    texts = []
-
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            txt = page.extract_text()
-            if txt:
-                lines = txt.split("\n")
-                texts.extend(lines)
-
+    blocks = extract_pdf_blocks(file)
+    texts = [block.text for block in blocks]
     return pd.DataFrame({"text": texts})

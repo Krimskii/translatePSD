@@ -18,7 +18,7 @@ def full_translate_dxf(src, dst, tmp_dir="tmp"):
 
     print("STEP 2: render")
     img_path = os.path.join(tmp_dir, "render.png")
-    render_dxf_to_png(tmp_dxf, img_path, dpi=400)
+    render_meta = render_dxf_to_png(tmp_dxf, img_path, dpi=400)
 
     print("STEP 3: OCR detect")
     boxes = detect_text_boxes(img_path)
@@ -36,7 +36,7 @@ def full_translate_dxf(src, dst, tmp_dir="tmp"):
 
     print("STEP 5: inject back")
     doc = ezdxf.readfile(tmp_dxf)
-    insert_texts_from_ocr(doc, boxes, translated)
+    insert_texts_from_ocr(doc, boxes, translated, render_meta)
     doc.saveas(dst)
 
     print("DONE:", dst)

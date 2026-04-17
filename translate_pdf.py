@@ -1,28 +1,60 @@
-import shutil
-
+import fitz
 import pandas as pd
-import pdfplumber
 
+from pdf_utils import extract_pdf_blocks, fit_textbox
 from translator_hybrid import translate_df
 
 
 def translate_pdf(src, dst):
-    texts = []
+    blocks = extract_pdf_blocks(src)
+    if not blocks:
+        doc = fitz.open(src)
+        try:
+            doc.save(dst)
+        finally:
+            doc.close()
+        return dst
 
-    with pdfplumber.open(src) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                texts.extend(page_text.split("\n"))
-
-    df = pd.DataFrame({"text": texts})
+    df = pd.DataFrame({"text": [block.text for block in blocks]})
     df = translate_df(df)
+    translations = df["translated"].tolist()
 
-    shutil.copy2(src, dst)
-    sidecar_path = f"{dst}.translated.txt"
+    doc = fitz.open(src)
 
-    with open(sidecar_path, "w", encoding="utf-8") as file:
-        for text in df["translated"]:
-            file.write(f"{text}\n")
+    try:
+        for block, translated in zip(blocks, translations):
+            page = doc[block.page_index]
+            rect = fitz.Rect(block.bbox)
+            text = str(translated).strip()
 
-    return sidecar_path
+            if not text:
+                continue
+
+            page.add_redact_annot(rect, fill=(1, 1, 1))
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+
+            fontsize = fit_textbox(page, rect, text)
+            inserted = page.insert_textbox(
+                rect,
+                text,
+                fontname="helv",
+                fontsize=fontsize,
+                color=(0, 0, 0),
+                align=fitz.TEXT_ALIGN_LEFT,
+            )
+
+            if inserted < 0:
+                page.insert_textbox(
+                    rect,
+                    text,
+                    fontname="helv",
+                    fontsize=max(fontsize - 1.5, 5),
+                    color=(0, 0, 0),
+                    align=fitz.TEXT_ALIGN_LEFT,
+                )
+
+        doc.save(dst)
+    finally:
+        doc.close()
+
+    return dst
