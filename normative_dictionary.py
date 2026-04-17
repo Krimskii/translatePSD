@@ -1,4 +1,5 @@
 import os
+import re
 from functools import lru_cache
 
 import pandas as pd
@@ -8,7 +9,20 @@ DEFAULT_PATH = os.getenv("NORMATIVE_DICTIONARY_PATH", "dictionary/normative_term
 APPROVED_SHEET = "approved_terms"
 CANDIDATES_SHEET = "candidates"
 APPROVED_COLUMNS = ["SECTION", "CN", "RU", "STANDARD_REF", "STATUS", "NOTE"]
-CANDIDATE_COLUMNS = ["SECTION", "CN", "CURRENT_RU", "SOURCE", "STANDARD_REF", "STATUS", "NOTE"]
+CANDIDATE_COLUMNS = [
+    "SECTION",
+    "CN",
+    "CURRENT_RU",
+    "SOURCE",
+    "STANDARD_REF",
+    "STATUS",
+    "NOTE",
+    "COUNT",
+    "CONFIDENCE",
+    "RECOMMENDED",
+]
+CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
+CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 
 
 def _bootstrap_terms():
@@ -64,6 +78,42 @@ def _status_is_approved(value):
     return str(value).strip().upper() in {"APPROVED", "OK", "TRUE", "1", "ДА"}
 
 
+def _status_is_recommended(value):
+    return str(value).strip().upper() in {"RECOMMENDED", "TRUE", "1", "ДА", "YES"}
+
+
+def _score_candidate(source_text, translated_text, source_name):
+    source = str(source_text).strip()
+    translated = str(translated_text).strip()
+    score = 0.0
+
+    if source and translated:
+        score += 0.1
+    if translated and not CHINESE_RE.search(translated):
+        score += 0.35
+    if CYRILLIC_RE.search(translated):
+        score += 0.2
+    if translated and len(translated) >= max(4, int(len(source) * 0.25)):
+        score += 0.15
+    if str(source_name).startswith(("memory", "section_dict", "ollama_duplicate", "deepseek_duplicate")):
+        score += 0.15
+    if str(source_name).startswith("deepseek"):
+        score += 0.1
+    if translated and translated.lower() != source.lower():
+        score += 0.05
+
+    return round(min(score, 1.0), 2)
+
+
+def _recommend_candidate(count, confidence, translated_text):
+    translated = str(translated_text).strip()
+    if not translated:
+        return False
+    if CHINESE_RE.search(translated):
+        return False
+    return int(count) >= 2 and float(confidence) >= 0.75
+
+
 @lru_cache(maxsize=1)
 def load_normative_dictionary(path=DEFAULT_PATH):
     workbook = _ensure_workbook(path)
@@ -106,11 +156,15 @@ def sync_normative_candidates(df, path=DEFAULT_PATH):
     candidates = _read_sheet(workbook, CANDIDATES_SHEET, CANDIDATE_COLUMNS)
 
     known = set()
-    for frame, translation_column in ((approved, "RU"), (candidates, "CURRENT_RU")):
+    for frame, translation_column in ((approved, "RU"),):
         for _, row in frame.iterrows():
             known.add((str(row["SECTION"]).strip(), str(row["CN"]).strip(), str(row.get(translation_column, "")).strip()))
 
-    rows = []
+    existing = {}
+    for idx, row in candidates.iterrows():
+        key = (str(row["SECTION"]).strip(), str(row["CN"]).strip(), str(row["CURRENT_RU"]).strip())
+        existing[key] = idx
+
     for _, row in df.iterrows():
         source = str(row.get("text", "")).strip()
         if not source:
@@ -124,23 +178,40 @@ def sync_normative_candidates(df, path=DEFAULT_PATH):
         if key in known:
             continue
 
-        rows.append(
-            {
+        confidence = _score_candidate(source, current_ru, source_name)
+
+        if key in existing:
+            idx = existing[key]
+            count = int(candidates.at[idx, "COUNT"] or 0) + 1
+            candidates.at[idx, "COUNT"] = count
+            candidates.at[idx, "SOURCE"] = source_name
+            candidates.at[idx, "CONFIDENCE"] = max(float(candidates.at[idx, "CONFIDENCE"] or 0), confidence)
+            if _status_is_approved(candidates.at[idx, "STATUS"]):
+                continue
+            if _recommend_candidate(count, candidates.at[idx, "CONFIDENCE"], current_ru):
+                candidates.at[idx, "STATUS"] = "RECOMMENDED"
+                candidates.at[idx, "RECOMMENDED"] = "YES"
+            elif not str(candidates.at[idx, "STATUS"]).strip():
+                candidates.at[idx, "STATUS"] = "NEW"
+        else:
+            count = 1
+            recommended = _recommend_candidate(count, confidence, current_ru)
+            new_row = {
                 "SECTION": section,
                 "CN": source,
                 "CURRENT_RU": current_ru,
                 "SOURCE": source_name,
                 "STANDARD_REF": "",
-                "STATUS": "NEW",
+                "STATUS": "RECOMMENDED" if recommended else "NEW",
                 "NOTE": "",
+                "COUNT": count,
+                "CONFIDENCE": confidence,
+                "RECOMMENDED": "YES" if recommended else "",
             }
-        )
-        known.add(key)
+            candidates = pd.concat([candidates, pd.DataFrame([new_row], columns=CANDIDATE_COLUMNS)], ignore_index=True)
+            existing[key] = len(candidates) - 1
 
-    if not rows:
-        return workbook
-
-    updated = pd.concat([candidates, pd.DataFrame(rows, columns=CANDIDATE_COLUMNS)], ignore_index=True)
+    updated = candidates.copy()
     updated = updated.drop_duplicates(subset=["SECTION", "CN", "CURRENT_RU"], keep="last")
 
     with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
@@ -148,3 +219,73 @@ def sync_normative_candidates(df, path=DEFAULT_PATH):
         updated.to_excel(writer, sheet_name=CANDIDATES_SHEET, index=False)
 
     return workbook
+
+
+def get_recommended_candidates(path=DEFAULT_PATH):
+    workbook = _ensure_workbook(path)
+    candidates = _read_sheet(workbook, CANDIDATES_SHEET, CANDIDATE_COLUMNS)
+    recommended = candidates[
+        candidates["STATUS"].apply(_status_is_recommended) | candidates["RECOMMENDED"].apply(_status_is_recommended)
+    ].copy()
+    if recommended.empty:
+        return recommended
+    return recommended.sort_values(by=["COUNT", "CONFIDENCE"], ascending=[False, False])
+
+
+def promote_recommended_candidates(path=DEFAULT_PATH):
+    workbook = _ensure_workbook(path)
+    approved = _read_sheet(workbook, APPROVED_SHEET, APPROVED_COLUMNS)
+    candidates = _read_sheet(workbook, CANDIDATES_SHEET, CANDIDATE_COLUMNS)
+    recommended = get_recommended_candidates(path)
+
+    if recommended.empty:
+        return 0
+
+    approved_rows = approved.copy()
+    existing_keys = {
+        (str(row["SECTION"]).strip(), str(row["CN"]).strip(), str(row["RU"]).strip())
+        for _, row in approved_rows.iterrows()
+    }
+
+    promoted = 0
+    for _, row in recommended.iterrows():
+        key = (str(row["SECTION"]).strip(), str(row["CN"]).strip(), str(row["CURRENT_RU"]).strip())
+        if key not in existing_keys:
+            approved_rows = pd.concat(
+                [
+                    approved_rows,
+                    pd.DataFrame(
+                        [
+                            {
+                                "SECTION": row["SECTION"],
+                                "CN": row["CN"],
+                                "RU": row["CURRENT_RU"],
+                                "STANDARD_REF": row["STANDARD_REF"],
+                                "STATUS": "APPROVED",
+                                "NOTE": row["NOTE"],
+                            }
+                        ],
+                        columns=APPROVED_COLUMNS,
+                    ),
+                ],
+                ignore_index=True,
+            )
+            existing_keys.add(key)
+            promoted += 1
+
+        mask = (
+            (candidates["SECTION"].astype(str) == str(row["SECTION"]))
+            & (candidates["CN"].astype(str) == str(row["CN"]))
+            & (candidates["CURRENT_RU"].astype(str) == str(row["CURRENT_RU"]))
+        )
+        candidates.loc[mask, "STATUS"] = "APPROVED"
+        candidates.loc[mask, "RECOMMENDED"] = ""
+
+    approved_rows = approved_rows.drop_duplicates(subset=["SECTION", "CN", "RU"], keep="last")
+
+    with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
+        approved_rows.to_excel(writer, sheet_name=APPROVED_SHEET, index=False)
+        candidates.to_excel(writer, sheet_name=CANDIDATES_SHEET, index=False)
+
+    refresh_normative_dictionary_cache()
+    return promoted

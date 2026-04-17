@@ -5,8 +5,12 @@ import pandas as pd
 import streamlit as st
 
 from batch_processing import build_batch_zip, process_uploaded_file
-from normative_dictionary import DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH
-from normative_dictionary import sync_normative_candidates
+from normative_dictionary import (
+    DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH,
+    get_recommended_candidates,
+    promote_recommended_candidates,
+    sync_normative_candidates,
+)
 from normalizer import normalize_df
 from output_names import build_ru_name
 from parser_docx import parse_docx
@@ -24,6 +28,16 @@ st.caption(
     "Лист `approved_terms` хранит утвержденные термины, лист `candidates` пополняется автоматически."
 )
 st.caption("Для CAD загружайте `DXF`. Если исходник в `DWG`, сохраните его в AutoCAD как `DXF`.")
+
+recommended_candidates = get_recommended_candidates()
+if not recommended_candidates.empty:
+    st.subheader("Рекомендуемые термины")
+    st.write(f"Готово к переносу в `approved_terms`: {len(recommended_candidates)}")
+    st.dataframe(recommended_candidates.head(20))
+    if st.button("Перенести рекомендованные в approved_terms"):
+        promoted_count = promote_recommended_candidates()
+        st.success(f"Перенесено в approved_terms: {promoted_count}")
+        st.rerun()
 
 uploaded_files = st.file_uploader(
     "Загрузить файл (Excel / PDF / DOCX / DXF)",
