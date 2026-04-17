@@ -46,8 +46,17 @@ def collect(doc):
     return [fix_spaced_text(container.text) for container in iter_docx_text_containers(doc)]
 
 
+def _replace_in_primary_run(runs, visible_indices, text):
+    primary_idx = visible_indices[0]
+    runs[primary_idx].text = text
+
+    for idx in visible_indices[1:]:
+        runs[idx].text = ""
+
+
 def _apply_to_runs(paragraph, text):
     runs = paragraph.runs
+    text = cleanup_translation(text)
 
     if not runs:
         paragraph.text = text
@@ -62,9 +71,15 @@ def _apply_to_runs(paragraph, text):
 
     total_len = sum(len(run_texts[i]) for i in visible_indices)
     if total_len <= 0:
-        runs[visible_indices[0]].text = text
-        for idx in visible_indices[1:]:
-            runs[idx].text = ""
+        _replace_in_primary_run(runs, visible_indices, text)
+        return
+
+    fragmented_layout = len(visible_indices) >= 4 and total_len / max(len(visible_indices), 1) <= 3
+    expanded_translation = len(text) >= int(total_len * 1.25)
+    dense_table_text = " " in text and len(text.split()) >= 3 and len(visible_indices) >= 3
+
+    if fragmented_layout or expanded_translation or dense_table_text:
+        _replace_in_primary_run(runs, visible_indices, text)
         return
 
     remaining = text
@@ -92,6 +107,7 @@ def _apply_to_runs(paragraph, text):
             continue
         run.text += remaining if run.text != remaining else ""
         remaining = ""
+
 
 def apply(doc, translated):
     for container, text in zip(iter_docx_text_containers(doc), translated):

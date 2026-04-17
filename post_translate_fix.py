@@ -2,6 +2,18 @@ import re
 
 
 CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
+PROMPT_LEAK_RE = re.compile(
+    r"^\s*(?:rules?|правила)\s*:\s*.*?(?:text|текст)\s*:\s*",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+LEADING_RULE_LINE_RE = re.compile(
+    r"^\s*(?:rules?|правила)\s*:.*$",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+LEADING_BULLET_RE = re.compile(
+    r"^\s*[-•]\s*(?:keep|translate|return|do not|сохранять|перевести|не добавлять|вернуть).*$",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
 
 PHRASE_REPLACEMENTS = {
     "车间门": "дверь цеха",
@@ -73,8 +85,25 @@ def replace_known_terms(text):
     return value
 
 
+def strip_prompt_leak(text):
+    value = str(text).strip()
+
+    if not value:
+        return value
+
+    if re.match(r"^\s*(?:rules?|правила)\s*:", value, flags=re.IGNORECASE):
+        value = PROMPT_LEAK_RE.sub("", value)
+
+    value = LEADING_RULE_LINE_RE.sub("", value).strip()
+    value = LEADING_BULLET_RE.sub("", value).strip()
+    value = re.sub(r"^\s*(?:text|текст)\s*:\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\n{3,}", "\n\n", value)
+    return value.strip()
+
+
 def cleanup_translation(text):
-    value = replace_known_terms(str(text).strip())
+    value = strip_prompt_leak(str(text).strip())
+    value = replace_known_terms(value)
 
     # Remove leftover isolated Chinese symbols after phrase substitutions.
     value = CHINESE_RE.sub(" ", value)
