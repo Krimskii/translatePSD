@@ -1,6 +1,7 @@
 import os
 
 import cv2
+import numpy as np
 
 
 os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
@@ -79,20 +80,98 @@ def _merge_lines(lines):
     return merged
 
 
+def _extract_old_style_lines(result):
+    if not isinstance(result, list) or not result:
+        return []
+
+    first = result[0]
+    if not isinstance(first, list):
+        return []
+
+    extracted = []
+    for line in first:
+        try:
+            bbox = line[0]
+            text = str(line[1][0]).strip()
+            score = float(line[1][1])
+        except Exception:
+            continue
+        extracted.append((bbox, text, score))
+    return extracted
+
+
+def _extract_new_style_lines(result):
+    if not isinstance(result, list) or not result:
+        return []
+
+    extracted = []
+    for item in result:
+        if not isinstance(item, dict):
+            continue
+
+        polys = item.get("dt_polys") or []
+        texts = item.get("rec_texts") or []
+        scores = item.get("rec_scores") or []
+
+        for bbox, text, score in zip(polys, texts, scores):
+            try:
+                extracted.append((bbox, str(text).strip(), float(score)))
+            except Exception:
+                continue
+
+    return extracted
+
+
+def _extract_lines(result):
+    lines = _extract_old_style_lines(result)
+    if lines:
+        return lines
+    return _extract_new_style_lines(result)
+
+
+def _prepare_images(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    denoised = cv2.GaussianBlur(gray, (3, 3), 0)
+    adaptive = cv2.adaptiveThreshold(
+        denoised,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31,
+        11,
+    )
+    otsu = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+    variants = [img, cv2.cvtColor(adaptive, cv2.COLOR_GRAY2BGR), cv2.cvtColor(otsu, cv2.COLOR_GRAY2BGR)]
+    return variants
+
+
 def detect_text_boxes(img_path):
     img = cv2.imread(img_path)
     if img is None:
         raise FileNotFoundError(f"Image not found or unreadable: {img_path}")
 
-    result = _get_ocr().ocr(img, cls=True)
-    if not result or not result[0]:
+    scale = 1.0
+    max_side = max(img.shape[:2])
+    if max_side < 2600:
+        scale = min(2600 / max_side, 2.0)
+        if scale > 1.05:
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+    raw_lines = []
+    for prepared in _prepare_images(img):
+        result = _get_ocr().ocr(prepared, cls=True)
+        raw_lines = _extract_lines(result)
+        if raw_lines:
+            break
+
+    if not raw_lines:
         return []
 
     lines = []
-    for line in result[0]:
-        bbox = line[0]
-        text = str(line[1][0]).strip()
-        score = float(line[1][1])
+    for bbox, text, score in raw_lines:
+        if scale != 1.0:
+            bbox = (np.array(bbox, dtype=float) / scale).tolist()
 
         if score < 0.45 or not text:
             continue

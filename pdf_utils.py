@@ -70,7 +70,7 @@ def _ocr_blocks_from_page(page: fitz.Page, page_index: int):
     except Exception:
         return []
 
-    matrix = fitz.Matrix(2, 2)
+    matrix = fitz.Matrix(3, 3)
     pix = page.get_pixmap(matrix=matrix, alpha=False)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
