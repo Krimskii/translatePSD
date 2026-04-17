@@ -11,6 +11,7 @@ from parser_docx import parse_docx
 from parser_pdf import parse_pdf
 from translator_hybrid import translate_df
 from translate_docx import apply_docx_dataframe
+from translate_excel import apply_excel_dataframe, workbook_to_translation_df
 from translate_pdf import apply_pdf_dataframe
 from validator import validate_df
 from writer_dxf_blocks import write_translated_dxf
@@ -23,11 +24,7 @@ def _dataframe_to_excel_bytes(df):
 
 
 def _prepare_excel_dataframe(uploaded_file):
-    df = pd.read_excel(uploaded_file)
-    if "text" not in df.columns:
-        df = df.astype(str)
-        df["text"] = df.apply(lambda row: " ".join(row.values), axis=1)
-    return df
+    return workbook_to_translation_df(uploaded_file)
 
 
 def _prepare_document_dataframe(uploaded_file, suffix):
@@ -62,6 +59,18 @@ def _save_docx_output(uploaded_file, df):
     output = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
     output.close()
     apply_docx_dataframe(source_path, output.name, df)
+    return Path(output.name).read_bytes()
+
+
+def _save_excel_output(uploaded_file, df):
+    source_suffix = Path(uploaded_file.name).suffix.lower() or ".xlsx"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=source_suffix) as source_tmp:
+        source_tmp.write(uploaded_file.getvalue())
+        source_path = source_tmp.name
+
+    output = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    output.close()
+    apply_excel_dataframe(source_path, output.name, df)
     return Path(output.name).read_bytes()
 
 
@@ -107,7 +116,7 @@ def process_uploaded_file(uploaded_file, *, normalize=True, validate=True):
         warn_count = 0 if report.empty else int((report["status"] != "OK").sum())
 
         if output_ext == ".xlsx":
-            output_bytes = _dataframe_to_excel_bytes(translated_df)
+            output_bytes = _save_excel_output(uploaded_file, translated_df)
         elif output_ext == ".docx":
             output_bytes = _save_docx_output(uploaded_file, translated_df)
         elif output_ext == ".pdf":

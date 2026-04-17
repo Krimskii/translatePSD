@@ -1,3 +1,4 @@
+import hashlib
 import os
 import re
 from functools import lru_cache
@@ -20,6 +21,7 @@ CANDIDATE_COLUMNS = [
     "COUNT",
     "CONFIDENCE",
     "RECOMMENDED",
+    "DOC_KEYS",
 ]
 CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
@@ -114,6 +116,33 @@ def _recommend_candidate(count, confidence, translated_text):
     return int(count) >= 2 and float(confidence) >= 0.75
 
 
+def _document_fingerprint(df):
+    parts = []
+    for _, row in df.iterrows():
+        parts.append(
+            "||".join(
+                [
+                    str(row.get("section", row.get("SECTION", "UNKNOWN"))).strip(),
+                    str(row.get("text", "")).strip(),
+                ]
+            )
+        )
+
+    payload = "\n".join(parts).encode("utf-8")
+    return hashlib.sha1(payload).hexdigest()[:12]
+
+
+def _split_doc_keys(value):
+    raw = str(value).strip()
+    if not raw:
+        return set()
+    return {item for item in raw.split("|") if item}
+
+
+def _join_doc_keys(keys):
+    return "|".join(sorted(set(keys)))
+
+
 @lru_cache(maxsize=1)
 def load_normative_dictionary(path=DEFAULT_PATH):
     workbook = _ensure_workbook(path)
@@ -154,6 +183,7 @@ def sync_normative_candidates(df, path=DEFAULT_PATH):
     workbook = _ensure_workbook(path)
     approved = _read_sheet(workbook, APPROVED_SHEET, APPROVED_COLUMNS)
     candidates = _read_sheet(workbook, CANDIDATES_SHEET, CANDIDATE_COLUMNS)
+    document_key = _document_fingerprint(df)
 
     known = set()
     for frame, translation_column in ((approved, "RU"),):
@@ -165,6 +195,7 @@ def sync_normative_candidates(df, path=DEFAULT_PATH):
         key = (str(row["SECTION"]).strip(), str(row["CN"]).strip(), str(row["CURRENT_RU"]).strip())
         existing[key] = idx
 
+    seen_in_document = set()
     for _, row in df.iterrows():
         source = str(row.get("text", "")).strip()
         if not source:
@@ -177,14 +208,21 @@ def sync_normative_candidates(df, path=DEFAULT_PATH):
 
         if key in known:
             continue
+        if key in seen_in_document:
+            continue
+        seen_in_document.add(key)
 
         confidence = _score_candidate(source, current_ru, source_name)
 
         if key in existing:
             idx = existing[key]
-            count = int(candidates.at[idx, "COUNT"] or 0) + 1
+            doc_keys = _split_doc_keys(candidates.at[idx, "DOC_KEYS"])
+            if document_key not in doc_keys:
+                doc_keys.add(document_key)
+            count = len(doc_keys)
             candidates.at[idx, "COUNT"] = count
             candidates.at[idx, "SOURCE"] = source_name
+            candidates.at[idx, "DOC_KEYS"] = _join_doc_keys(doc_keys)
             candidates.at[idx, "CONFIDENCE"] = max(float(candidates.at[idx, "CONFIDENCE"] or 0), confidence)
             if _status_is_approved(candidates.at[idx, "STATUS"]):
                 continue
@@ -207,6 +245,7 @@ def sync_normative_candidates(df, path=DEFAULT_PATH):
                 "COUNT": count,
                 "CONFIDENCE": confidence,
                 "RECOMMENDED": "YES" if recommended else "",
+                "DOC_KEYS": document_key,
             }
             candidates = pd.concat([candidates, pd.DataFrame([new_row], columns=CANDIDATE_COLUMNS)], ignore_index=True)
             existing[key] = len(candidates) - 1

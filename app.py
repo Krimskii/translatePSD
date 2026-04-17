@@ -9,7 +9,6 @@ from normative_dictionary import (
     DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH,
     get_recommended_candidates,
     promote_recommended_candidates,
-    sync_normative_candidates,
 )
 from normalizer import normalize_df
 from output_names import build_ru_name
@@ -17,6 +16,7 @@ from parser_docx import parse_docx
 from parser_pdf import parse_pdf
 from translator_hybrid import translate_df
 from translate_docx import apply_docx_dataframe
+from translate_excel import apply_excel_dataframe, workbook_to_translation_df
 from translate_pdf import apply_pdf_dataframe
 from validator import validate_df
 from writer_dxf_blocks import write_translated_dxf
@@ -111,7 +111,7 @@ if uploaded_files:
         filename = uploaded_file.name.lower()
 
         if filename.endswith(".xlsx") or filename.endswith(".xls"):
-            df = pd.read_excel(uploaded_file)
+            df = workbook_to_translation_df(uploaded_file)
         elif filename.endswith(".docx"):
             texts = parse_docx(uploaded_file)
             df = pd.DataFrame({"text": texts})
@@ -134,7 +134,6 @@ if uploaded_files:
 
         if "df" not in st.session_state:
             st.session_state.df = df.copy()
-            sync_normative_candidates(st.session_state.df)
 
         if st.button("Перевести"):
             with st.spinner("Перевод..."):
@@ -151,14 +150,32 @@ if uploaded_files:
         st.dataframe(st.session_state.df)
 
         try:
-            buffer = io.BytesIO()
-            st.session_state.df.to_excel(buffer, index=False)
-            st.download_button(
-                label="Скачать Excel",
-                data=buffer.getvalue(),
-                file_name=build_ru_name(uploaded_file.name, output_ext=".xlsx"),
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+            if filename.endswith(".xlsx") or filename.endswith(".xls"):
+                source_suffix = ".xls" if filename.endswith(".xls") else ".xlsx"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=source_suffix) as source_tmp:
+                    source_tmp.write(uploaded_file.getvalue())
+                    source_path = source_tmp.name
+
+                output = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+                output.close()
+                apply_excel_dataframe(source_path, output.name, st.session_state.df)
+
+                with open(output.name, "rb") as file:
+                    st.download_button(
+                        label="Скачать Excel",
+                        data=file.read(),
+                        file_name=build_ru_name(uploaded_file.name, output_ext=".xlsx"),
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+            else:
+                buffer = io.BytesIO()
+                st.session_state.df.to_excel(buffer, index=False)
+                st.download_button(
+                    label="Скачать Excel",
+                    data=buffer.getvalue(),
+                    file_name=build_ru_name(uploaded_file.name, output_ext=".xlsx"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
         except ModuleNotFoundError as exc:
             if exc.name == "openpyxl":
                 st.warning("Для выгрузки в Excel нужен пакет openpyxl. Пока доступна выгрузка в CSV.")

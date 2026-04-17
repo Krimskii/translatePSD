@@ -39,4 +39,10 @@ def extract_texts(doc):
                 (e.dxf.handle, cleaned)
             )
 
+        elif e.dxftype() == "ATTRIB":
+
+            texts.append(
+                (e.dxf.handle, str(e.dxf.text).strip())
+            )
+
     return texts

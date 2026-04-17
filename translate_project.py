@@ -17,7 +17,7 @@ def translate_project(root, out):
         for file_name in files:
             src = os.path.join(path, file_name)
             ext = file_name.lower()
-            dst_name = build_ru_name(file_name)
+            dst_name = build_ru_name(file_name, output_ext=".xlsx" if ext.endswith(".xls") or ext.endswith(".xlsx") else None)
             dst = os.path.join(out_dir, dst_name)
 
             print("translate:", file_name)
