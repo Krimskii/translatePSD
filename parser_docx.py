@@ -1,16 +1,23 @@
 from docx import Document
 
 
-def parse_docx(file):
-    doc = Document(file)
-    texts = []
-
+def iter_docx_text_containers(doc):
     for paragraph in doc.paragraphs:
-        texts.append(paragraph.text)
+        yield paragraph
 
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
-                texts.append(cell.text)
+                for paragraph in cell.paragraphs:
+                    yield paragraph
 
-    return texts
+    for section in doc.sections:
+        for paragraph in section.header.paragraphs:
+            yield paragraph
+        for paragraph in section.footer.paragraphs:
+            yield paragraph
+
+
+def parse_docx(file):
+    doc = Document(file)
+    return [container.text for container in iter_docx_text_containers(doc)]

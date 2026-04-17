@@ -5,6 +5,28 @@ from pdf_utils import extract_pdf_blocks, fit_textbox
 from translator_hybrid import translate_df
 
 
+def _safe_insert(page, rect, text, block):
+    fontsize = fit_textbox(page, rect, text, preferred_size=block.font_size)
+    inserted = page.insert_textbox(
+        rect,
+        text,
+        fontname="helv",
+        fontsize=fontsize,
+        color=block.color,
+        align=block.align,
+    )
+
+    if inserted < 0:
+        page.insert_textbox(
+            rect,
+            text,
+            fontname="helv",
+            fontsize=max(fontsize - 1.5, 5),
+            color=block.color,
+            align=block.align,
+        )
+
+
 def translate_pdf(src, dst):
     blocks = extract_pdf_blocks(src)
     if not blocks:
@@ -22,6 +44,7 @@ def translate_pdf(src, dst):
     doc = fitz.open(src)
 
     try:
+        insert_jobs = []
         for block, translated in zip(blocks, translations):
             page = doc[block.page_index]
             rect = fitz.Rect(block.bbox)
@@ -31,27 +54,14 @@ def translate_pdf(src, dst):
                 continue
 
             page.add_redact_annot(rect, fill=(1, 1, 1))
-            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+            insert_jobs.append((block.page_index, rect, text, block))
 
-            fontsize = fit_textbox(page, rect, text)
-            inserted = page.insert_textbox(
-                rect,
-                text,
-                fontname="helv",
-                fontsize=fontsize,
-                color=(0, 0, 0),
-                align=fitz.TEXT_ALIGN_LEFT,
-            )
+        for page_index in sorted({job[0] for job in insert_jobs}):
+            doc[page_index].apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
-            if inserted < 0:
-                page.insert_textbox(
-                    rect,
-                    text,
-                    fontname="helv",
-                    fontsize=max(fontsize - 1.5, 5),
-                    color=(0, 0, 0),
-                    align=fitz.TEXT_ALIGN_LEFT,
-                )
+        for page_index, rect, text, block in insert_jobs:
+            page = doc[page_index]
+            _safe_insert(page, rect, text, block)
 
         doc.save(dst)
     finally:

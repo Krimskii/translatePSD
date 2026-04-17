@@ -2,6 +2,7 @@ import pandas as pd
 from docx import Document
 
 from dxf_utils import pick_output_text
+from parser_docx import iter_docx_text_containers
 from post_translate_fix import cleanup_translation, has_chinese
 from translator_hybrid import translate_df
 
@@ -42,33 +43,59 @@ def fix_spaced_text(text):
 
 
 def collect(doc):
-    texts = []
+    return [fix_spaced_text(container.text) for container in iter_docx_text_containers(doc)]
 
-    for paragraph in doc.paragraphs:
-        texts.append(fix_spaced_text(paragraph.text))
 
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                texts.append(fix_spaced_text(cell.text))
+def _apply_to_runs(paragraph, text):
+    runs = paragraph.runs
 
-    return texts
+    if not runs:
+        paragraph.text = text
+        return
 
+    run_texts = [run.text for run in runs]
+    visible_indices = [i for i, value in enumerate(run_texts) if value]
+
+    if not visible_indices:
+        runs[0].text = text
+        return
+
+    total_len = sum(len(run_texts[i]) for i in visible_indices)
+    if total_len <= 0:
+        runs[visible_indices[0]].text = text
+        for idx in visible_indices[1:]:
+            runs[idx].text = ""
+        return
+
+    remaining = text
+    consumed = 0
+
+    for pos, idx in enumerate(visible_indices):
+        original_len = len(run_texts[idx])
+
+        if pos == len(visible_indices) - 1:
+            piece = remaining
+        else:
+            share = round(len(text) * (original_len / total_len))
+            share = max(share, 0)
+            next_consumed = min(consumed + share, len(text))
+            piece = text[consumed:next_consumed]
+            consumed = next_consumed
+            remaining = text[consumed:]
+
+        runs[idx].text = piece
+
+    for idx, run in enumerate(runs):
+        if idx not in visible_indices:
+            continue
+        if idx != visible_indices[-1]:
+            continue
+        run.text += remaining if run.text != remaining else ""
+        remaining = ""
 
 def apply(doc, translated):
-    index = 0
-
-    for paragraph in doc.paragraphs:
-        if index < len(translated):
-            paragraph.text = translated[index]
-        index += 1
-
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                if index < len(translated):
-                    cell.text = translated[index]
-                index += 1
+    for container, text in zip(iter_docx_text_containers(doc), translated):
+        _apply_to_runs(container, text)
 
 
 def apply_docx_dataframe(src, dst, df):
