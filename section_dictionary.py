@@ -1,3 +1,4 @@
+from normative_dictionary import apply_normative_terms, load_normative_dictionary
 from validator_sections import detect_section
 
 
@@ -73,8 +74,15 @@ def detect_section_for_text(text):
 def apply_section_terms(text, section=None):
     value = str(text)
     section_name = section or detect_section_for_text(value)
+    merged_terms = dict(SECTION_TERMS.get(section_name, {}))
 
-    for source, target in sorted(SECTION_TERMS.get(section_name, {}).items(), key=lambda item: len(item[0]), reverse=True):
+    for source, target in load_normative_dictionary().get("ALL", {}).items():
+        merged_terms[source] = target
+
+    for source, target in load_normative_dictionary().get(section_name, {}).items():
+        merged_terms[source] = target
+
+    for source, target in sorted(merged_terms.items(), key=lambda item: len(item[0]), reverse=True):
         value = value.replace(source, target)
 
-    return value
+    return apply_normative_terms(value, section_name)

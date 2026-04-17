@@ -1,5 +1,8 @@
 import re
 
+from normative_dictionary import apply_normative_terms, sync_normative_candidates
+from validator_sections import detect_section
+
 
 TERM_REPLACEMENTS = {
     "квадратная яма": "квадратный колодец",
@@ -33,12 +36,15 @@ TERM_REPLACEMENTS = {
 }
 
 
-def normalize(text):
+def normalize(text, section=None):
     t = str(text)
+    section_name = section or detect_section(t)
 
     # CAD / local terminology cleanup
     for source in sorted(TERM_REPLACEMENTS, key=len, reverse=True):
         t = t.replace(source, TERM_REPLACEMENTS[source])
+
+    t = apply_normative_terms(t, section_name)
 
     # note-style wording common in local design docs
     t = re.sub(r"^также можно\b", "допускается", t, flags=re.IGNORECASE)
@@ -102,5 +108,7 @@ def normalize(text):
 
 def normalize_df(df):
     source = "translated" if "translated" in df.columns else "text"
-    df["normalized"] = df[source].apply(normalize)
+    sections = df["section"] if "section" in df.columns else df["text"].apply(detect_section)
+    df["normalized"] = [normalize(text, section) for text, section in zip(df[source], sections)]
+    sync_normative_candidates(df)
     return df

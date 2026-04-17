@@ -2,6 +2,7 @@ import re
 
 import pandas as pd
 
+from normative_dictionary import sync_normative_candidates
 from apply_cad_dict import apply_cad_dict
 from post_translate_fix import cleanup_translation, has_chinese
 from section_dictionary import apply_section_terms, detect_section_for_text
@@ -176,4 +177,5 @@ def translate_df(df):
     df["translated"] = translated
     df["section"] = sections
     df["translation_source"] = sources[: len(df)]
+    sync_normative_candidates(df)
     return df

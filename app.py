@@ -5,6 +5,8 @@ import pandas as pd
 import streamlit as st
 
 from dwg_utils import convert_dwg_to_dxf, find_dwg_converter
+from normative_dictionary import DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH
+from normative_dictionary import sync_normative_candidates
 from normalizer import normalize_df
 from parser_docx import parse_docx
 from parser_pdf import parse_pdf
@@ -16,6 +18,10 @@ from writer_dxf_blocks import write_translated_dxf
 
 
 st.title("AI локализатор ПСД Казахстан")
+st.caption(
+    f"Нормативный словарь РК: `{NORMATIVE_DICTIONARY_PATH}`. "
+    "Лист `approved_terms` хранит утвержденные термины, лист `candidates` пополняется автоматически."
+)
 
 uploaded_file = st.file_uploader("Загрузить файл (Excel / PDF / DOCX / DXF / DWG)")
 
@@ -59,6 +65,7 @@ if uploaded_file is not None:
 
     if "df" not in st.session_state:
         st.session_state.df = df.copy()
+        sync_normative_candidates(st.session_state.df)
 
     if filename.endswith(".dwg") and not find_dwg_converter():
         st.warning("Для работы с DWG нужен установленный ODA File Converter или dwg2dxf.")
