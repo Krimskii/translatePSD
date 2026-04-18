@@ -16,6 +16,8 @@ from normalizer import normalize_df
 from output_names import build_ru_name
 from parser_docx import parse_docx
 from parser_pdf import parse_pdf
+from rebuild_dictionaries import rebuild_dictionary_bundle
+from translation_memory import clean_memory, load_memory, save_memory
 from translator_hybrid import translate_df
 from translate_docx import apply_docx_dataframe
 from translate_excel import apply_excel_dataframe, workbook_to_translation_df
@@ -36,6 +38,23 @@ if "normative_cleaned" not in st.session_state:
 
 if st.session_state.get("normative_cleaned", 0):
     st.info(f"Очищено мусорных кандидатов из словаря: {st.session_state['normative_cleaned']}")
+
+if st.button("Пересобрать словари и шаблоны"):
+    summary = rebuild_dictionary_bundle()
+    st.session_state["normative_cleaned"] = 0
+    st.success(
+        "Словари пересобраны: "
+        f"approved_terms={summary['approved_rows']}, "
+        f"candidates={summary['candidate_rows']}, "
+        f"memory={summary['translation_memory_entries']}"
+    )
+    st.rerun()
+
+if st.button("Очистить память переводов"):
+    cleaned_memory, removed_memory = clean_memory(load_memory())
+    save_memory(cleaned_memory)
+    st.success(f"Удалено мусорных записей из translation memory: {removed_memory}")
+    st.rerun()
 
 if st.button("Очистить мусор в candidates"):
     removed = clean_normative_candidates()

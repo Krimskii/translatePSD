@@ -7,6 +7,8 @@ import pandas as pd
 
 
 DEFAULT_PATH = os.getenv("NORMATIVE_DICTIONARY_PATH", "dictionary/normative_terms.xlsx")
+APPROVED_SEED_PATH = os.getenv("APPROVED_TERMS_SEED_PATH", "dictionary/approved_terms_seed.csv")
+CANDIDATES_TEMPLATE_PATH = os.getenv("CANDIDATES_TEMPLATE_PATH", "dictionary/candidates_template.csv")
 APPROVED_SHEET = "approved_terms"
 CANDIDATES_SHEET = "candidates"
 APPROVED_COLUMNS = ["SECTION", "CN", "RU", "STANDARD_REF", "STATUS", "NOTE"]
@@ -30,21 +32,30 @@ LATIN_SHORT_RE = re.compile(r"^[A-Za-z]{1,3}$")
 
 
 def _bootstrap_terms():
+    if os.path.exists(APPROVED_SEED_PATH):
+        frame = pd.read_csv(APPROVED_SEED_PATH, dtype=str).fillna("")
+        for column in APPROVED_COLUMNS:
+            if column not in frame.columns:
+                frame[column] = ""
+        return frame[APPROVED_COLUMNS].to_dict(orient="records")
+
     return [
+        {"SECTION": "ТХ", "CN": "工业流程说明", "RU": "описание промышленного процесса", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
         {"SECTION": "ОВ", "CN": "通风", "RU": "вентиляция", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
         {"SECTION": "ОВ", "CN": "排风", "RU": "вытяжная вентиляция", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
-        {"SECTION": "ОВ", "CN": "送风", "RU": "приточная вентиляция", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
-        {"SECTION": "ОВ", "CN": "风管", "RU": "воздуховод", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
         {"SECTION": "ВК", "CN": "排水沟", "RU": "водоотводный лоток", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
-        {"SECTION": "ВК", "CN": "污水沟", "RU": "лоток сточных вод", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
-        {"SECTION": "ВК", "CN": "方井", "RU": "квадратный смотровой колодец", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
-        {"SECTION": "ВК", "CN": "圆井", "RU": "круглый смотровой колодец", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
-        {"SECTION": "КЖ", "CN": "钢构柱", "RU": "стальная колонна", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
-        {"SECTION": "КЖ", "CN": "柱面", "RU": "грань колонны", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
-        {"SECTION": "КЖ", "CN": "行车牛腿", "RU": "подкрановая консоль", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
-        {"SECTION": "АР", "CN": "车间门", "RU": "дверь цеха", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
-        {"SECTION": "ЭОМ", "CN": "桥架", "RU": "кабельный лоток", "STANDARD_REF": "Внутренний словарь РК", "STATUS": "APPROVED", "NOTE": ""},
     ]
+
+
+def _bootstrap_candidates_template():
+    if os.path.exists(CANDIDATES_TEMPLATE_PATH):
+        frame = pd.read_csv(CANDIDATES_TEMPLATE_PATH, dtype=str).fillna("")
+        for column in CANDIDATE_COLUMNS:
+            if column not in frame.columns:
+                frame[column] = ""
+        return frame[CANDIDATE_COLUMNS]
+
+    return pd.DataFrame(columns=CANDIDATE_COLUMNS)
 
 
 def _ensure_workbook(path=DEFAULT_PATH):
@@ -56,13 +67,30 @@ def _ensure_workbook(path=DEFAULT_PATH):
         return path
 
     approved = pd.DataFrame(_bootstrap_terms(), columns=APPROVED_COLUMNS)
-    candidates = pd.DataFrame(columns=CANDIDATE_COLUMNS)
+    candidates = _bootstrap_candidates_template()
 
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         approved.to_excel(writer, sheet_name=APPROVED_SHEET, index=False)
         candidates.to_excel(writer, sheet_name=CANDIDATES_SHEET, index=False)
 
     return path
+
+
+def rebuild_normative_dictionary(path=DEFAULT_PATH):
+    workbook = _ensure_workbook(path)
+    approved = pd.DataFrame(_bootstrap_terms(), columns=APPROVED_COLUMNS)
+    candidates = _bootstrap_candidates_template()
+
+    with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
+        approved.to_excel(writer, sheet_name=APPROVED_SHEET, index=False)
+        candidates.to_excel(writer, sheet_name=CANDIDATES_SHEET, index=False)
+
+    refresh_normative_dictionary_cache()
+    return {
+        "workbook": workbook,
+        "approved_rows": len(approved),
+        "candidate_rows": len(candidates),
+    }
 
 
 def _read_sheet(path, sheet_name, columns):

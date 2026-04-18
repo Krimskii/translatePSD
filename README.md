@@ -10,6 +10,7 @@
 - память переводов между запусками
 - memory-first перевод и дедупликация одинаковых строк внутри одного прогона
 - словари по разделам `ОВ`, `ВК`, `ЭОМ`, `КЖ`, `АР`
+- словари по разделу `ТХ` для технологических описаний и производственных потоков
 - нормативный Excel-словарь РК с автопополнением кандидатов
 - автооценка кандидатов словаря и перенос `RECOMMENDED` терминов в `approved_terms`
 - базовая нормализация и валидация результата
@@ -45,6 +46,9 @@ pip install -r requirements.txt
 - `OLLAMA_MODEL`
 - `TRANSLATION_MEMORY_PATH`
 - `NORMATIVE_DICTIONARY_PATH`
+- `APPROVED_TERMS_SEED_PATH`
+- `CANDIDATES_TEMPLATE_PATH`
+- `SECTION_TERMS_PATH`
 
 ## Запуск
 
@@ -98,6 +102,7 @@ translate_project("source_dir", "output_dir")
 
 - Память переводов хранится локально в `dictionary/translation_memory.json`, если не переопределить путь через `TRANSLATION_MEMORY_PATH`.
 - Нормативный словарь хранится в `dictionary/normative_terms.xlsx`, если не переопределить путь через `NORMATIVE_DICTIONARY_PATH`.
+- Базовые сиды лежат в `dictionary/approved_terms_seed.csv`, `dictionary/section_terms_seed.json`, `dictionary/candidates_template.csv`.
 - В `approved_terms` нужно вручную утверждать локальные термины и при желании указывать ссылку на норму РК, ГОСТ или СП.
 - Лист `candidates` пополняется автоматически из загруженных документов и помогает собирать новые термины на проверку.
 - В таблице после перевода появляются служебные поля `section` и `translation_source`.
@@ -123,3 +128,17 @@ translate_project("source_dir", "output_dir")
    - `STANDARD_REF` например `СП РК 4.02-101-2012`, `ГОСТ 21.601-2011`
    - `STATUS` поставьте `APPROVED`
 5. Сохраните файл и перезапустите приложение, чтобы словарь перечитался.
+
+## Пересборка словарей и шаблонов
+
+Если нужно начать словарную базу заново:
+
+```powershell
+python rebuild_dictionaries.py
+```
+
+Это действие:
+- пересобирает `dictionary/normative_terms.xlsx` из `dictionary/approved_terms_seed.csv`
+- очищает `candidates`
+- сбрасывает `dictionary/translation_memory.json`
+- оставляет секционные заготовки в `dictionary/section_terms_seed.json`

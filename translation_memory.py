@@ -36,6 +36,15 @@ def save_memory(memory):
         json.dump(memory, file, ensure_ascii=False, indent=2)
 
 
+def reset_memory(path=MEMORY_PATH):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump({}, file, ensure_ascii=False, indent=2)
+    return {"path": path, "entries": 0}
+
+
 def make_key(text, section=None):
     return f"{section or 'UNKNOWN'}::{str(text).strip()}"
 
