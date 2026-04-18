@@ -1,7 +1,11 @@
 import os
+import shutil
+import subprocess
+from io import StringIO
 
 import cv2
 import numpy as np
+import pandas as pd
 
 
 os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
@@ -147,6 +151,112 @@ def _prepare_images(img):
     return variants
 
 
+def _find_tesseract():
+    candidates = [
+        os.getenv("TESSERACT_EXE"),
+        shutil.which("tesseract"),
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _tesseract_tsv_lines(img_path):
+    tesseract = _find_tesseract()
+    if not tesseract:
+        return []
+
+    attempts = [
+        ("chi_sim+eng", "11"),
+        ("chi_sim+eng", "6"),
+        ("eng", "11"),
+    ]
+
+    best_lines = []
+    for lang, psm in attempts:
+        command = [
+            tesseract,
+            img_path,
+            "stdout",
+            "--psm",
+            psm,
+            "-l",
+            lang,
+            "tsv",
+        ]
+
+        try:
+            completed = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+            )
+        except Exception:
+            continue
+
+        try:
+            table = pd.read_csv(StringIO(completed.stdout), sep="\t")
+        except Exception:
+            continue
+
+        if table.empty or "text" not in table.columns:
+            continue
+
+        table = table.fillna("")
+        table["text"] = table["text"].astype(str).str.strip()
+        table = table[table["text"] != ""]
+        if table.empty:
+            continue
+
+        if "conf" in table.columns:
+            table["conf"] = pd.to_numeric(table["conf"], errors="coerce").fillna(-1)
+            table = table[table["conf"] >= 20]
+            if table.empty:
+                continue
+
+        line_groups = []
+        group_cols = [col for col in ["block_num", "par_num", "line_num"] if col in table.columns]
+        grouped = table.groupby(group_cols) if group_cols else [(None, table)]
+
+        for _key, group in grouped:
+            if group.empty:
+                continue
+
+            text = " ".join(group["text"].tolist()).strip()
+            if not text:
+                continue
+
+            left = float(group["left"].min())
+            top = float(group["top"].min())
+            right = float((group["left"] + group["width"]).max())
+            bottom = float((group["top"] + group["height"]).max())
+            score = float(group["conf"].mean()) / 100.0 if "conf" in group.columns else 0.7
+
+            line_groups.append(
+                (
+                    [
+                        [left, top],
+                        [right, top],
+                        [right, bottom],
+                        [left, bottom],
+                    ],
+                    text,
+                    score,
+                )
+            )
+
+        if len(line_groups) > len(best_lines):
+            best_lines = line_groups
+
+    return best_lines
+
+
 def _run_ocr(image):
     ocr = _get_ocr()
 
@@ -181,6 +291,9 @@ def detect_text_boxes(img_path):
         raw_lines = _extract_lines(result)
         if raw_lines:
             break
+
+    if not raw_lines:
+        raw_lines = _tesseract_tsv_lines(img_path)
 
     if not raw_lines:
         return []
