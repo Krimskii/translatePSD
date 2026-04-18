@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from functools import lru_cache
 
 from normative_dictionary import apply_normative_terms, load_normative_dictionary
@@ -7,6 +8,7 @@ from validator_sections import detect_section
 
 
 SECTION_TERMS_PATH = os.getenv("SECTION_TERMS_PATH", "dictionary/section_terms_seed.json")
+CHINESE_GROUP_RE = re.compile(r"[\u4e00-\u9fff]+")
 SECTION_TERMS_FALLBACK = {
     "ТХ": {
         "工艺": "технология",
@@ -62,9 +64,8 @@ def detect_section_for_text(text):
     return section if section in terms else "UNKNOWN"
 
 
-def apply_section_terms(text, section=None):
-    value = str(text)
-    section_name = section or detect_section_for_text(value)
+def build_section_term_map(section=None):
+    section_name = str(section or "").strip() or "UNKNOWN"
     merged_terms = dict(load_section_terms().get(section_name, {}))
 
     for source, target in load_normative_dictionary().get("ALL", {}).items():
@@ -72,6 +73,47 @@ def apply_section_terms(text, section=None):
 
     for source, target in load_normative_dictionary().get(section_name, {}).items():
         merged_terms[source] = target
+
+    return merged_terms
+
+
+def _translate_chunk_with_terms(chunk, term_map):
+    value = str(chunk)
+    if value in term_map:
+        return term_map[value]
+
+    for source, target in sorted(term_map.items(), key=lambda item: len(item[0]), reverse=True):
+        value = value.replace(source, target)
+    return value
+
+
+def translate_structured_cn_text(text, section=None, on_missing=None):
+    value = str(text)
+    section_name = section or detect_section_for_text(value)
+    term_map = build_section_term_map(section_name)
+    tokens = re.split(r"([\u4e00-\u9fff]+)", value)
+    translated_tokens = []
+
+    for token in tokens:
+        if not token:
+            continue
+        if CHINESE_GROUP_RE.fullmatch(token):
+            translated = _translate_chunk_with_terms(token, term_map)
+            if CHINESE_GROUP_RE.search(translated) and on_missing:
+                recovered = on_missing(token)
+                if recovered:
+                    translated = recovered
+            translated_tokens.append(translated)
+        else:
+            translated_tokens.append(token)
+
+    return "".join(translated_tokens)
+
+
+def apply_section_terms(text, section=None):
+    value = str(text)
+    section_name = section or detect_section_for_text(value)
+    merged_terms = build_section_term_map(section_name)
 
     for source, target in sorted(merged_terms.items(), key=lambda item: len(item[0]), reverse=True):
         value = value.replace(source, target)

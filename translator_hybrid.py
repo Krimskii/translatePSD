@@ -4,7 +4,7 @@ import re
 from normative_dictionary import sync_normative_candidates
 from apply_cad_dict import apply_cad_dict
 from post_translate_fix import cleanup_translation, has_chinese
-from section_dictionary import apply_section_terms, detect_section_for_text
+from section_dictionary import apply_section_terms, detect_section_for_text, translate_structured_cn_text
 from translation_memory import (
     clean_memory,
     get_memory_translation_from_store,
@@ -176,6 +176,45 @@ def _deepseek_candidate(source_text, section):
     return candidate, "deepseek"
 
 
+def _translate_cn_chunk(chunk, section):
+    chunk = str(chunk).strip()
+    if not chunk:
+        return None
+
+    candidate = cleanup_translation(apply_section_terms(ollama_translate_one(chunk), section))
+    if not candidate or has_chinese(candidate) or _meaningful_token_count(candidate) < 1:
+        if deepseek_available():
+            try:
+                candidate = cleanup_translation(apply_section_terms(deepseek_translate(chunk), section))
+            except Exception as exc:
+                LOGGER.warning("DeepSeek chunk translation failed: %s", exc)
+                return None
+        else:
+            return None
+
+    if not candidate or has_chinese(candidate) or _meaningful_token_count(candidate) < 1:
+        return None
+    return candidate
+
+
+def _structured_fallback(source_text, section):
+    source_text = str(source_text).strip()
+    candidate = cleanup_translation(
+        translate_structured_cn_text(
+            source_text,
+            section,
+            on_missing=lambda chunk: _translate_cn_chunk(chunk, section),
+        )
+    )
+    if candidate == source_text:
+        return None, None
+    if has_chinese(candidate):
+        return None, None
+    if _looks_suspicious(source_text, candidate):
+        return None, None
+    return candidate, "structured_fallback"
+
+
 def _translate_one(source_text, model_text, section, memory):
     source_text = str(source_text).strip()
     memory_candidate, memory_source = _memory_first_candidate(source_text, section, memory)
@@ -202,6 +241,11 @@ def _translate_one(source_text, model_text, section, memory):
     if deepseek_text:
         update_memory_entry_in_store(memory, source_text, deepseek_text, section)
         return deepseek_text, deepseek_source
+
+    structured_text, structured_source = _structured_fallback(source_text, section)
+    if structured_text:
+        update_memory_entry_in_store(memory, source_text, structured_text, section)
+        return structured_text, structured_source
 
     dict_text, dict_source = _dictionary_fallback(source_text, section)
     if dict_text:
