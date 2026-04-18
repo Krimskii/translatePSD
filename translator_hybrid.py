@@ -21,6 +21,7 @@ CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 LATIN_ONLY_RE = re.compile(r"^[A-Za-z0-9\s,.;:()/%×\-–—_]+$")
 PUNCT_ONLY_RE = re.compile(r"^[\s\d,.;:()/%×\-–—_]+$")
 MEANINGFUL_TOKEN_RE = re.compile(r"[А-Яа-яЁёA-Za-z]+")
+CHINESE_GROUP_RE = re.compile(r"[\u4e00-\u9fff]+")
 
 
 def _cyrillic_ratio(text):
@@ -84,15 +85,33 @@ def _meaningful_content_ratio(text):
     return meaningful / max(len(value), 1)
 
 
+def _meaningful_token_count(text):
+    return len(MEANINGFUL_TOKEN_RE.findall(str(text)))
+
+
+def _chinese_group_count(text):
+    return len(CHINESE_GROUP_RE.findall(str(text)))
+
+
 def _accept_dictionary_result(source_text, candidate, *, section):
+    source_text = str(source_text).strip()
     candidate = cleanup_translation(str(candidate).strip())
     if _looks_suspicious(source_text, candidate):
         return False
-    if _meaningful_content_ratio(candidate) < 0.35:
+    candidate_ratio = _meaningful_content_ratio(candidate)
+    if candidate_ratio < 0.35:
         return False
-    if section == "UNKNOWN" and _meaningful_content_ratio(candidate) < 0.5:
+    if section == "UNKNOWN" and candidate_ratio < 0.5:
         return False
-    return len(candidate) >= max(4, int(len(str(source_text).strip()) * 0.18))
+    chinese_groups = _chinese_group_count(source_text)
+    candidate_tokens = _meaningful_token_count(candidate)
+    if chinese_groups >= 3 and candidate_tokens < 2:
+        return False
+    if ("（" in source_text or "(" in source_text) and candidate_tokens < 2:
+        return False
+    if source_text.count("，") + source_text.count(",") >= 2 and candidate_tokens < 2:
+        return False
+    return len(candidate) >= max(4, int(len(source_text) * 0.18))
 
 
 def _should_use_deepseek_first(text):

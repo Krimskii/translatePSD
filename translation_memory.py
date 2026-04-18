@@ -6,6 +6,7 @@ import re
 CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 PUNCT_ONLY_RE = re.compile(r"^[\s\d,.;:()/%×\-–—_:+*\\[\]{}<>|]+$")
+MEANINGFUL_TOKEN_RE = re.compile(r"[А-Яа-яЁёA-Za-z]+")
 
 
 MEMORY_PATH = os.getenv("TRANSLATION_MEMORY_PATH", "dictionary/translation_memory.json")
@@ -97,6 +98,12 @@ def _looks_bad_translation(value):
     if CHINESE_RE.search(text):
         return True
     if not CYRILLIC_RE.search(text) and len(text) < 12:
+        return True
+    meaningful = sum(len(token) for token in MEANINGFUL_TOKEN_RE.findall(text))
+    ratio = meaningful / max(len(text), 1)
+    if ratio < 0.35:
+        return True
+    if ("(" in text or "（" in text) and len(MEANINGFUL_TOKEN_RE.findall(text)) < 2:
         return True
     return False
 
