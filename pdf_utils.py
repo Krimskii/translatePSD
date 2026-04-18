@@ -236,13 +236,13 @@ def _block_alignment(block_bbox, line_bbox):
     return fitz.TEXT_ALIGN_LEFT
 
 
-def _ocr_blocks_from_page(page: fitz.Page, page_index: int):
+def _ocr_blocks_from_page(page: fitz.Page, page_index: int, *, aggressive: bool = False):
     try:
         from ocr_detect import detect_text_boxes
     except Exception:
         return []
 
-    matrix = fitz.Matrix(3, 3)
+    matrix = fitz.Matrix(4, 4) if aggressive else fitz.Matrix(3, 3)
     pix = page.get_pixmap(matrix=matrix, alpha=False)
 
     image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n).copy()
@@ -253,7 +253,12 @@ def _ocr_blocks_from_page(page: fitz.Page, page_index: int):
             image_path = tmp.name
 
         try:
-            return detect_text_boxes(image_path)
+            return detect_text_boxes(
+                image_path,
+                merge=not aggressive,
+                min_score=0.12 if aggressive else 0.2,
+                min_size=4 if aggressive else 6,
+            )
         except Exception:
             return []
         finally:
@@ -266,7 +271,7 @@ def _ocr_blocks_from_page(page: fitz.Page, page_index: int):
 
     ocr_boxes = detect_on_image(image)
 
-    if len(ocr_boxes) < 40:
+    if aggressive or len(ocr_boxes) < 40:
         height, width = image.shape[:2]
         zones = [
             (0, 0, width, height // 2),
@@ -278,6 +283,8 @@ def _ocr_blocks_from_page(page: fitz.Page, page_index: int):
             (0, height // 2, width // 2, height),
             (width // 2, height // 2, width, height),
             (0, int(height * 0.72), width, height),
+            (0, 0, width, int(height * 0.28)),
+            (0, int(height * 0.28), width, int(height * 0.72)),
         ]
 
         zoned_boxes = []
@@ -320,11 +327,14 @@ def _ocr_blocks_from_page(page: fitz.Page, page_index: int):
                     }
                 )
 
-            from ocr_detect import _merge_lines
+            if aggressive:
+                ocr_boxes = merged_input
+            else:
+                from ocr_detect import _merge_lines
 
-            ocr_boxes = _merge_lines(merged_input)
-            for item in ocr_boxes:
-                item.pop("bounds", None)
+                ocr_boxes = _merge_lines(merged_input)
+                for item in ocr_boxes:
+                    item.pop("bounds", None)
 
     blocks = []
     scale_x = max(pix.width / max(page.rect.width, 1), 1)
@@ -400,6 +410,9 @@ def extract_pdf_blocks(src) -> list[PdfTextBlock]:
 
             if _page_is_sparse(page_blocks):
                 page_blocks = _merge_block_sets(page_blocks, _ocr_blocks_from_textpage(page, page_index))
+
+            if _page_is_sparse(page_blocks):
+                page_blocks = _merge_block_sets(page_blocks, _ocr_blocks_from_page(page, page_index, aggressive=True))
 
             blocks.extend(page_blocks)
     finally:

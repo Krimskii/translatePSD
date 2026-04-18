@@ -273,7 +273,7 @@ def _run_ocr(image):
     return ocr.ocr(image, cls=True)
 
 
-def detect_text_boxes(img_path):
+def detect_text_boxes(img_path, *, merge=True, min_score=0.2, min_size=6):
     img = cv2.imread(img_path)
     if img is None:
         raise FileNotFoundError(f"Image not found or unreadable: {img_path}")
@@ -303,20 +303,22 @@ def detect_text_boxes(img_path):
         if scale != 1.0:
             bbox = (np.array(bbox, dtype=float) / scale).tolist()
 
-        if score < 0.2 or not text:
+        if score < min_score or not text:
             continue
 
         bounds = _bbox_bounds(bbox)
         width = bounds[2] - bounds[0]
         height = bounds[3] - bounds[1]
 
-        if width < 6 or height < 6:
+        if width < min_size or height < min_size:
             continue
 
         lines.append({"bbox": bbox, "bounds": bounds, "text": text, "score": score})
 
-    merged = _merge_lines(lines)
-    for item in merged:
+    if merge:
+        lines = _merge_lines(lines)
+
+    for item in lines:
         item.pop("bounds", None)
 
-    return merged
+    return lines
