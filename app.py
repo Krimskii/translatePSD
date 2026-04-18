@@ -7,6 +7,7 @@ import streamlit as st
 from batch_processing import build_batch_zip, process_uploaded_file
 from normative_dictionary import (
     DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH,
+    clean_normative_candidates,
     get_recommended_candidates,
     promote_recommended_candidates,
 )
@@ -28,6 +29,18 @@ st.caption(
     "Лист `approved_terms` хранит утвержденные термины, лист `candidates` пополняется автоматически."
 )
 st.caption("Для CAD загружайте `DXF`. Если исходник в `DWG`, сохраните его в AutoCAD как `DXF`.")
+
+if "normative_cleaned" not in st.session_state:
+    st.session_state["normative_cleaned"] = clean_normative_candidates()
+
+if st.session_state.get("normative_cleaned", 0):
+    st.info(f"Очищено мусорных кандидатов из словаря: {st.session_state['normative_cleaned']}")
+
+if st.button("Очистить мусор в candidates"):
+    removed = clean_normative_candidates()
+    st.session_state["normative_cleaned"] = removed
+    st.success(f"Удалено мусорных строк из candidates: {removed}")
+    st.rerun()
 
 recommended_candidates = get_recommended_candidates()
 if not recommended_candidates.empty:

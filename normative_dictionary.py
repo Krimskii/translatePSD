@@ -25,6 +25,8 @@ CANDIDATE_COLUMNS = [
 ]
 CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+PUNCT_ONLY_RE = re.compile(r"^[\s\d,.;:()/%×\-–—_:+*\\[\]{}<>|]+$")
+LATIN_SHORT_RE = re.compile(r"^[A-Za-z]{1,3}$")
 
 
 def _bootstrap_terms():
@@ -105,6 +107,48 @@ def _score_candidate(source_text, translated_text, source_name):
         score += 0.05
 
     return round(min(score, 1.0), 2)
+
+
+def _normalized_text(value):
+    return re.sub(r"\s+", " ", str(value).strip())
+
+
+def _looks_like_noise(value):
+    text = _normalized_text(value)
+    if not text:
+        return True
+    if PUNCT_ONLY_RE.match(text):
+        return True
+    if LATIN_SHORT_RE.match(text):
+        return True
+    if len(text) <= 2:
+        return True
+    return False
+
+
+def _is_viable_candidate(section, source_text, translated_text, source_name):
+    source = _normalized_text(source_text)
+    translated = _normalized_text(translated_text)
+    source_name = str(source_name).strip()
+    section = str(section).strip() or "UNKNOWN"
+
+    if not source or not translated:
+        return False
+    if _looks_like_noise(source) or _looks_like_noise(translated):
+        return False
+    if not CHINESE_RE.search(source):
+        return False
+    if CHINESE_RE.search(translated):
+        return False
+    if not CYRILLIC_RE.search(translated):
+        return False
+    if len(translated) < max(4, int(len(source) * 0.18)):
+        return False
+    if section == "UNKNOWN" and len(translated) < 8:
+        return False
+    if source_name.startswith("section_dict") and len(translated) < 8:
+        return False
+    return True
 
 
 def _recommend_candidate(count, confidence, translated_text):
@@ -204,6 +248,8 @@ def sync_normative_candidates(df, path=DEFAULT_PATH):
         section = str(row.get("section", row.get("SECTION", "UNKNOWN"))).strip() or "UNKNOWN"
         current_ru = str(row.get("normalized", row.get("translated", ""))).strip()
         source_name = str(row.get("translation_source", "document")).strip() or "document"
+        if not _is_viable_candidate(section, source, current_ru, source_name):
+            continue
         key = (section, source, current_ru)
 
         if key in known:
@@ -252,6 +298,7 @@ def sync_normative_candidates(df, path=DEFAULT_PATH):
 
     updated = candidates.copy()
     updated = updated.drop_duplicates(subset=["SECTION", "CN", "CURRENT_RU"], keep="last")
+    updated = _sanitize_candidates_frame(updated)
 
     with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
         approved.to_excel(writer, sheet_name=APPROVED_SHEET, index=False)
@@ -269,6 +316,60 @@ def get_recommended_candidates(path=DEFAULT_PATH):
     if recommended.empty:
         return recommended
     return recommended.sort_values(by=["COUNT", "CONFIDENCE"], ascending=[False, False])
+
+
+def _sanitize_candidates_frame(candidates):
+    sanitized_rows = []
+
+    for _, row in candidates.iterrows():
+        section = str(row["SECTION"]).strip() or "UNKNOWN"
+        source = _normalized_text(row["CN"])
+        translated = _normalized_text(row["CURRENT_RU"])
+        source_name = str(row["SOURCE"]).strip() or "document"
+
+        if not _is_viable_candidate(section, source, translated, source_name):
+            continue
+
+        confidence = max(float(row.get("CONFIDENCE", 0) or 0), _score_candidate(source, translated, source_name))
+        doc_keys = _split_doc_keys(row.get("DOC_KEYS", ""))
+        count = max(len(doc_keys), int(float(row.get("COUNT", 0) or 0)))
+        recommended = _recommend_candidate(count, confidence, translated)
+
+        sanitized_rows.append(
+            {
+                "SECTION": section,
+                "CN": source,
+                "CURRENT_RU": translated,
+                "SOURCE": source_name,
+                "STANDARD_REF": str(row.get("STANDARD_REF", "")).strip(),
+                "STATUS": "RECOMMENDED" if recommended and not _status_is_approved(row.get("STATUS", "")) else str(row.get("STATUS", "")).strip() or ("RECOMMENDED" if recommended else "NEW"),
+                "NOTE": str(row.get("NOTE", "")).strip(),
+                "COUNT": count,
+                "CONFIDENCE": round(min(confidence, 1.0), 2),
+                "RECOMMENDED": "YES" if recommended else "",
+                "DOC_KEYS": _join_doc_keys(doc_keys),
+            }
+        )
+
+    if not sanitized_rows:
+        return pd.DataFrame(columns=CANDIDATE_COLUMNS)
+
+    sanitized = pd.DataFrame(sanitized_rows, columns=CANDIDATE_COLUMNS)
+    sanitized = sanitized.drop_duplicates(subset=["SECTION", "CN", "CURRENT_RU"], keep="last")
+    return sanitized
+
+
+def clean_normative_candidates(path=DEFAULT_PATH):
+    workbook = _ensure_workbook(path)
+    approved = _read_sheet(workbook, APPROVED_SHEET, APPROVED_COLUMNS)
+    candidates = _read_sheet(workbook, CANDIDATES_SHEET, CANDIDATE_COLUMNS)
+    cleaned = _sanitize_candidates_frame(candidates)
+
+    with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
+        approved.to_excel(writer, sheet_name=APPROVED_SHEET, index=False)
+        cleaned.to_excel(writer, sheet_name=CANDIDATES_SHEET, index=False)
+
+    return len(candidates) - len(cleaned)
 
 
 def promote_recommended_candidates(path=DEFAULT_PATH):
