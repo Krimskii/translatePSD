@@ -3,7 +3,9 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass
 
+import cv2
 import fitz
+import numpy as np
 
 
 @dataclass
@@ -243,22 +245,86 @@ def _ocr_blocks_from_page(page: fitz.Page, page_index: int):
     matrix = fitz.Matrix(3, 3)
     pix = page.get_pixmap(matrix=matrix, alpha=False)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-        tmp.write(pix.tobytes("png"))
-        image_path = tmp.name
+    image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n).copy()
 
-    try:
+    def detect_on_image(image_array):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            cv2.imwrite(tmp.name, image_array)
+            image_path = tmp.name
+
         try:
-            ocr_boxes = detect_text_boxes(image_path)
+            return detect_text_boxes(image_path)
         except Exception:
             return []
-    finally:
-        try:
-            import os
+        finally:
+            try:
+                import os
 
-            os.unlink(image_path)
-        except Exception:
-            pass
+                os.unlink(image_path)
+            except Exception:
+                pass
+
+    ocr_boxes = detect_on_image(image)
+
+    if len(ocr_boxes) < 40:
+        height, width = image.shape[:2]
+        zones = [
+            (0, 0, width, height // 2),
+            (0, height // 2, width, height),
+            (0, 0, width // 2, height),
+            (width // 2, 0, width, height),
+            (0, 0, width // 2, height // 2),
+            (width // 2, 0, width, height // 2),
+            (0, height // 2, width // 2, height),
+            (width // 2, height // 2, width, height),
+            (0, int(height * 0.72), width, height),
+        ]
+
+        zoned_boxes = []
+        for x0, y0, x1, y1 in zones:
+            crop = image[y0:y1, x0:x1]
+            if crop.size == 0:
+                continue
+
+            for item in detect_on_image(crop):
+                bbox = np.array(item["bbox"], dtype=float)
+                bbox[:, 0] += x0
+                bbox[:, 1] += y0
+                zoned_boxes.append(
+                    {
+                        "bbox": bbox.tolist(),
+                        "text": item.get("text", ""),
+                        "score": item.get("score", 1.0),
+                    }
+                )
+
+        if zoned_boxes:
+            merged_input = []
+            for item in ocr_boxes + zoned_boxes:
+                text = str(item.get("text", "")).strip()
+                if not text:
+                    continue
+                bbox = item["bbox"]
+                bounds = (
+                    float(min(point[0] for point in bbox)),
+                    float(min(point[1] for point in bbox)),
+                    float(max(point[0] for point in bbox)),
+                    float(max(point[1] for point in bbox)),
+                )
+                merged_input.append(
+                    {
+                        "bbox": bbox,
+                        "bounds": bounds,
+                        "text": text,
+                        "score": float(item.get("score", 1.0)),
+                    }
+                )
+
+            from ocr_detect import _merge_lines
+
+            ocr_boxes = _merge_lines(merged_input)
+            for item in ocr_boxes:
+                item.pop("bounds", None)
 
     blocks = []
     scale_x = max(pix.width / max(page.rect.width, 1), 1)
