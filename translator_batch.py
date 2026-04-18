@@ -1,4 +1,5 @@
 import logging
+import json
 import os
 import re
 from typing import Iterable
@@ -16,6 +17,7 @@ MAX_BATCH_RESPONSE_TOKENS = int(os.getenv("OLLAMA_BATCH_NUM_PREDICT", "1200"))
 MAX_SINGLE_RESPONSE_TOKENS = int(os.getenv("OLLAMA_SINGLE_NUM_PREDICT", "1400"))
 SEPARATOR = "\n@@ROW@@\n"
 NOISE_RE = re.compile(r"^(?:here(?: is|'s)|translation|перевод|объяснение)\b", re.IGNORECASE)
+INDEXED_ROW_RE = re.compile(r"^\s*\[(\d+)\]\s*(.*)$")
 
 
 def _build_session():
@@ -65,10 +67,89 @@ def _normalize_batch_lines(lines: Iterable[str], expected_count: int):
     return cleaned
 
 
+def _parse_json_batch(raw_response, expected_count):
+    raw = str(raw_response).strip()
+    if not raw:
+        return None
+
+    fenced = re.search(r"```(?:json)?\s*(\[.*?\]|\{.*?\})\s*```", raw, flags=re.DOTALL)
+    if fenced:
+        raw = fenced.group(1)
+
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+
+    if isinstance(payload, dict):
+        if "rows" in payload and isinstance(payload["rows"], list):
+            payload = payload["rows"]
+        else:
+            indexed = []
+            for key, value in payload.items():
+                try:
+                    indexed.append((int(str(key)), str(value)))
+                except Exception:
+                    continue
+            if indexed:
+                indexed.sort(key=lambda item: item[0])
+                payload = [value for _, value in indexed]
+
+    if not isinstance(payload, list):
+        return None
+
+    normalized = _normalize_batch_lines(payload, expected_count)
+    return normalized
+
+
+def _parse_indexed_batch(raw_response, expected_count):
+    lines = [line.rstrip() for line in str(raw_response).splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    indexed = {}
+    current_index = None
+    buffer = []
+
+    def flush():
+        nonlocal current_index, buffer
+        if current_index is not None:
+            indexed[current_index] = " ".join(buffer).strip()
+        current_index = None
+        buffer = []
+
+    for line in lines:
+        match = INDEXED_ROW_RE.match(line)
+        if match:
+            flush()
+            current_index = int(match.group(1))
+            buffer = [match.group(2).strip()]
+        elif current_index is not None:
+            buffer.append(line.strip())
+
+    flush()
+
+    if len(indexed) != expected_count:
+        return None
+
+    ordered = [indexed.get(index + 1, "") for index in range(expected_count)]
+    if any(not value for value in ordered):
+        return None
+    return _normalize_batch_lines(ordered, expected_count)
+
+
 def _split_batch_response(raw_response, expected_count):
     raw = str(raw_response).strip()
     if not raw:
         return None
+
+    json_result = _parse_json_batch(raw, expected_count)
+    if json_result:
+        return json_result
+
+    indexed_result = _parse_indexed_batch(raw, expected_count)
+    if indexed_result:
+        return indexed_result
 
     if SEPARATOR.strip() in raw:
         parts = raw.split(SEPARATOR.strip())
@@ -101,14 +182,16 @@ def ollama_batch(texts):
     if not rows:
         return []
 
-    prompt_rows = [f"[{index + 1}]{row}" for index, row in enumerate(rows)]
+    prompt_rows = [f"[{index + 1}] {row}" for index, row in enumerate(rows)]
     prompt = (
         "Translate each Chinese engineering row into concise Russian.\n"
         "Return exactly the same number of rows in the same order.\n"
-        f"Use the separator {SEPARATOR.strip()} between rows.\n"
+        "Return ONLY valid JSON array of strings.\n"
+        'Example: ["строка1", "строка2"]\n'
         "Do not explain, do not comment, do not add headings.\n"
+        "Keep numbers, units, dimensions, abbreviations.\n"
         "If a row is already non-Chinese, return it unchanged.\n\n"
-        f"{SEPARATOR.join(prompt_rows)}"
+        + "\n".join(prompt_rows)
     )
 
     try:

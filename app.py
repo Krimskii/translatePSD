@@ -188,7 +188,7 @@ if uploaded_files:
         disabled_columns = [column for column in st.session_state.df.columns if column not in editable_columns]
         st.session_state.df = st.data_editor(
             st.session_state.df,
-            use_container_width=True,
+            width="stretch",
             num_rows="fixed",
             disabled=disabled_columns,
             key="main_translation_editor",
