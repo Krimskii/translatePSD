@@ -66,12 +66,20 @@ def _looks_suspicious(source_text, candidate):
 
     source_len = len(source_text)
     candidate_len = len(candidate)
+    source_groups = _chinese_group_count(source_text)
+    candidate_tokens = _meaningful_token_count(candidate)
 
     if source_has_chinese and source_len >= 20 and candidate_len < max(8, int(source_len * 0.22)):
         return True
     if source_has_chinese and source_len >= 20 and _cyrillic_ratio(candidate) < 0.12:
         return True
     if source_has_chinese and LATIN_ONLY_RE.match(candidate) and _cyrillic_ratio(candidate) == 0:
+        return True
+    if source_groups >= 3 and candidate_tokens < min(3, source_groups):
+        return True
+    if ("（" in source_text or "(" in source_text) and candidate_tokens < 3:
+        return True
+    if source_text.count("，") + source_text.count(",") >= 2 and candidate_tokens < 3:
         return True
 
     return False

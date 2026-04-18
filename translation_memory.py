@@ -7,6 +7,7 @@ CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 PUNCT_ONLY_RE = re.compile(r"^[\s\d,.;:()/%×\-–—_:+*\\[\]{}<>|]+$")
 MEANINGFUL_TOKEN_RE = re.compile(r"[А-Яа-яЁёA-Za-z]+")
+CHINESE_GROUP_RE = re.compile(r"[\u4e00-\u9fff]+")
 
 
 MEMORY_PATH = os.getenv("TRANSLATION_MEMORY_PATH", "dictionary/translation_memory.json")
@@ -108,13 +109,36 @@ def _looks_bad_translation(value):
     return False
 
 
+def _extract_source_from_key(key):
+    value = str(key)
+    if "::" not in value:
+        return ""
+    return value.split("::", 1)[1].strip()
+
+
+def _is_contextually_bad_translation(source_text, translated_text):
+    source_text = str(source_text).strip()
+    translated_text = str(translated_text).strip()
+    candidate_tokens = len(MEANINGFUL_TOKEN_RE.findall(translated_text))
+    source_groups = len(CHINESE_GROUP_RE.findall(source_text))
+
+    if source_groups >= 3 and candidate_tokens < min(3, source_groups):
+        return True
+    if ("（" in source_text or "(" in source_text) and candidate_tokens < 3:
+        return True
+    if source_text.count("，") + source_text.count(",") >= 2 and candidate_tokens < 3:
+        return True
+    return False
+
+
 def clean_memory(memory=None):
     store = load_memory() if memory is None else dict(memory)
     cleaned = {}
     removed = 0
 
     for key, value in store.items():
-        if _looks_bad_translation(value):
+        source_text = _extract_source_from_key(key)
+        if _looks_bad_translation(value) or _is_contextually_bad_translation(source_text, value):
             removed += 1
             continue
         cleaned[key] = str(value).strip()
