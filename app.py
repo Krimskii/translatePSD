@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from batch_processing import build_batch_zip, process_uploaded_file
+from llm_validator import llm_validate_and_edit_df
 from normative_dictionary import (
     DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH,
     clean_normative_candidates,
@@ -171,11 +172,27 @@ if uploaded_files:
             with st.spinner("Нормализация..."):
                 st.session_state.df = normalize_df(st.session_state.df.copy())
 
+        if st.button("LLM проверить и исправить"):
+            with st.spinner("LLM-валидация и редактура..."):
+                st.session_state.df, edited = llm_validate_and_edit_df(st.session_state.df.copy(), only_flagged=True)
+                if edited:
+                    st.success(f"LLM скорректировал строк: {edited}")
+                else:
+                    st.info("LLM не нашел строк для безопасной коррекции.")
+
         if st.button("Проверить СН РК"):
             report = validate_df(st.session_state.df)
             st.dataframe(report)
 
-        st.dataframe(st.session_state.df)
+        editable_columns = [column for column in st.session_state.df.columns if column in {"translated", "normalized"}]
+        disabled_columns = [column for column in st.session_state.df.columns if column not in editable_columns]
+        st.session_state.df = st.data_editor(
+            st.session_state.df,
+            use_container_width=True,
+            num_rows="fixed",
+            disabled=disabled_columns,
+            key="main_translation_editor",
+        )
 
         try:
             if filename.endswith(".xlsx") or filename.endswith(".xls"):
