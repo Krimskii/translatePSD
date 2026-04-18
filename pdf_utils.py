@@ -16,6 +16,64 @@ class PdfTextBlock:
     align: int
 
 
+def _line_blocks_from_words(words, page_index: int) -> list[PdfTextBlock]:
+    if not words:
+        return []
+
+    ordered = sorted(words, key=lambda item: (float(item[1]), float(item[0])))
+    rows: list[dict] = []
+
+    for word in ordered:
+        x0, y0, x1, y1, text = word[:5]
+        text = str(text).strip()
+        if not text:
+            continue
+
+        placed = False
+        for row in rows:
+            row_height = max(row["bbox"][3] - row["bbox"][1], 1.0)
+            if abs(y0 - row["bbox"][1]) <= row_height * 0.6:
+                row["items"].append((x0, text))
+                row["bbox"] = (
+                    min(row["bbox"][0], float(x0)),
+                    min(row["bbox"][1], float(y0)),
+                    max(row["bbox"][2], float(x1)),
+                    max(row["bbox"][3], float(y1)),
+                )
+                placed = True
+                break
+
+        if not placed:
+            rows.append(
+                {
+                    "bbox": (float(x0), float(y0), float(x1), float(y1)),
+                    "items": [(float(x0), text)],
+                }
+            )
+
+    blocks = []
+    for row in rows:
+        items = sorted(row["items"], key=lambda item: item[0])
+        text = " ".join(part for _x, part in items).strip()
+        if not text:
+            continue
+
+        bbox = row["bbox"]
+        font_size = max((bbox[3] - bbox[1]) * 0.75, 6.0)
+        blocks.append(
+            PdfTextBlock(
+                page_index=page_index,
+                bbox=bbox,
+                text=text,
+                font_size=font_size,
+                color=(0, 0, 0),
+                align=fitz.TEXT_ALIGN_LEFT,
+            )
+        )
+
+    return blocks
+
+
 def _page_dict_to_blocks(page_dict, page_index: int) -> list[PdfTextBlock]:
     page_blocks: list[PdfTextBlock] = []
 
@@ -190,7 +248,18 @@ def _ocr_blocks_from_textpage(page: fitz.Page, page_index: int):
     except Exception:
         return []
 
-    return _page_dict_to_blocks(page_dict, page_index)
+    dict_blocks = _page_dict_to_blocks(page_dict, page_index)
+
+    try:
+        words = page.get_text("words", textpage=textpage, sort=True)
+    except Exception:
+        words = []
+
+    word_blocks = _line_blocks_from_words(words, page_index)
+    if len(word_blocks) > len(dict_blocks):
+        return word_blocks
+
+    return dict_blocks
 
 
 def extract_pdf_blocks(src) -> list[PdfTextBlock]:
