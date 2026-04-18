@@ -3,7 +3,7 @@ import re
 
 from normative_dictionary import sync_normative_candidates
 from apply_cad_dict import apply_cad_dict
-from post_translate_fix import cleanup_translation, has_chinese
+from post_translate_fix import cleanup_translation, finalize_translation, has_chinese
 from section_dictionary import apply_section_terms, detect_section_for_text, translate_structured_cn_text
 from translation_memory import (
     clean_memory,
@@ -47,7 +47,7 @@ def _looks_model_explanatory(candidate):
 
 def _looks_suspicious(source_text, candidate):
     source_text = str(source_text).strip()
-    candidate = cleanup_translation(str(candidate).strip())
+    candidate, _, _ = finalize_translation(source_text, str(candidate).strip())
 
     if not candidate:
         return True
@@ -103,7 +103,7 @@ def _chinese_group_count(text):
 
 def _accept_dictionary_result(source_text, candidate, *, section):
     source_text = str(source_text).strip()
-    candidate = cleanup_translation(str(candidate).strip())
+    candidate, _, _ = finalize_translation(source_text, str(candidate).strip(), section)
     if _looks_suspicious(source_text, candidate):
         return False
     candidate_ratio = _meaningful_content_ratio(candidate)
@@ -139,9 +139,10 @@ def _memory_first_candidate(source_text, section, memory):
     source_text = str(source_text).strip()
     memory_hit = get_memory_translation_from_store(memory, source_text, section)
     if memory_hit:
-        return cleanup_translation(memory_hit), "memory"
+        cleaned, _, _ = finalize_translation(source_text, memory_hit, section)
+        return cleaned, "memory"
 
-    source_with_terms = cleanup_translation(apply_section_terms(source_text, section))
+    source_with_terms, _, _ = finalize_translation(source_text, apply_section_terms(source_text, section), section)
     short_label = len(source_text) <= 40
     if short_label and source_with_terms != source_text and _accept_dictionary_result(source_text, source_with_terms, section=section):
         return source_with_terms, "section_dict"
@@ -151,8 +152,8 @@ def _memory_first_candidate(source_text, section, memory):
 
 def _dictionary_fallback(source_text, section):
     source_text = str(source_text).strip()
-    section_text = cleanup_translation(apply_section_terms(source_text, section))
-    dict_text = cleanup_translation(apply_section_terms(apply_cad_dict(source_text), section))
+    section_text, _, _ = finalize_translation(source_text, apply_section_terms(source_text, section), section)
+    dict_text, _, _ = finalize_translation(source_text, apply_section_terms(apply_cad_dict(source_text), section), section)
 
     for candidate in (section_text, dict_text):
         if candidate != source_text and _accept_dictionary_result(source_text, candidate, section=section):
@@ -166,7 +167,7 @@ def _deepseek_candidate(source_text, section):
         return None, None
 
     try:
-        candidate = cleanup_translation(apply_section_terms(deepseek_translate(source_text), section))
+        candidate, _, _ = finalize_translation(source_text, apply_section_terms(deepseek_translate(source_text), section), section)
     except Exception as exc:
         LOGGER.warning("DeepSeek translation failed: %s", exc)
         return None, None
@@ -181,11 +182,11 @@ def _translate_cn_chunk(chunk, section):
     if not chunk:
         return None
 
-    candidate = cleanup_translation(apply_section_terms(ollama_translate_one(chunk), section))
+    candidate, _, _ = finalize_translation(chunk, apply_section_terms(ollama_translate_one(chunk), section), section)
     if not candidate or has_chinese(candidate) or _meaningful_token_count(candidate) < 1:
         if deepseek_available():
             try:
-                candidate = cleanup_translation(apply_section_terms(deepseek_translate(chunk), section))
+                candidate, _, _ = finalize_translation(chunk, apply_section_terms(deepseek_translate(chunk), section), section)
             except Exception as exc:
                 LOGGER.warning("DeepSeek chunk translation failed: %s", exc)
                 return None
@@ -199,12 +200,14 @@ def _translate_cn_chunk(chunk, section):
 
 def _structured_fallback(source_text, section):
     source_text = str(source_text).strip()
-    candidate = cleanup_translation(
+    candidate, _, _ = finalize_translation(
+        source_text,
         translate_structured_cn_text(
             source_text,
             section,
             on_missing=lambda chunk: _translate_cn_chunk(chunk, section),
-        )
+        ),
+        section,
     )
     if candidate == source_text:
         return None, None
@@ -227,12 +230,12 @@ def _translate_one(source_text, model_text, section, memory):
             update_memory_entry_in_store(memory, source_text, deepseek_text, section)
             return deepseek_text, source_name
 
-    candidate = cleanup_translation(apply_section_terms(model_text, section))
+    candidate, _, _ = finalize_translation(source_text, apply_section_terms(model_text, section), section)
     if not _looks_suspicious(source_text, candidate):
         update_memory_entry_in_store(memory, source_text, candidate, section)
         return candidate, "ollama"
 
-    retry_text = cleanup_translation(apply_section_terms(ollama_translate_one(source_text), section))
+    retry_text, _, _ = finalize_translation(source_text, apply_section_terms(ollama_translate_one(source_text), section), section)
     if not _looks_suspicious(source_text, retry_text):
         update_memory_entry_in_store(memory, source_text, retry_text, section)
         return retry_text, "ollama_retry"
@@ -272,11 +275,13 @@ def _resolve_batch_size(texts):
 
 def _collect_qc_flags(source_text, translated_text):
     flags = []
-    if has_chinese(translated_text):
+    cleaned_text, untranslated, cleanup_flags = finalize_translation(source_text, translated_text)
+    if untranslated:
         flags.append("contains_chinese")
-    if _looks_suspicious(source_text, translated_text):
+    flags.extend(cleanup_flags)
+    if _looks_suspicious(source_text, cleaned_text):
         flags.append("low_quality")
-    return ",".join(flags)
+    return ",".join(sorted(set(flag for flag in flags if flag)))
 
 
 def translate_df(df):
@@ -345,13 +350,22 @@ def translate_df(df):
             translated[idx] = original
         if sources[idx] is None:
             sources[idx] = "fallback"
-        if not qc_flags[idx]:
-            qc_flags[idx] = _collect_qc_flags(original, translated[idx])
-        untranslated[idx] = has_chinese(translated[idx])
+        cleaned_text, has_leftover, cleanup_flags = finalize_translation(original, translated[idx], sections[idx])
+        translated[idx] = cleaned_text
+        working_df.at[idx, "cleaned_translated"] = cleaned_text if "cleaned_translated" in working_df.columns else cleaned_text
+        extra_flags = set(filter(None, (qc_flags[idx] or "").split(","))) if qc_flags[idx] else set()
+        extra_flags.update(cleanup_flags)
+        if not extra_flags:
+            merged_flags = _collect_qc_flags(original, cleaned_text)
+        else:
+            merged_flags = ",".join(sorted(extra_flags | set(filter(None, _collect_qc_flags(original, cleaned_text).split(",")))))
+        qc_flags[idx] = merged_flags
+        untranslated[idx] = has_leftover
 
     save_memory(memory)
     working_df["text"] = texts
     working_df["translated"] = translated
+    working_df["cleaned_translated"] = translated
     working_df["section"] = sections
     working_df["translation_source"] = sources
     working_df["untranslated_chinese"] = untranslated

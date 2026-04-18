@@ -1,7 +1,9 @@
 import re
 
+from section_dictionary import build_section_term_map, detect_section_for_text, translate_structured_cn_text
 
-CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
+
+CHINESE_FRAGMENT_RE = re.compile(r"[\u4e00-\u9fff]+")
 PROMPT_LEAK_RE = re.compile(
     r"^\s*(?:rules?|правила)\s*:\s*.*?(?:text|текст)\s*:\s*",
     flags=re.IGNORECASE | re.DOTALL,
@@ -14,61 +16,103 @@ LEADING_BULLET_RE = re.compile(
     r"^\s*[-•]\s*(?:keep|translate|return|do not|сохранять|перевести|не добавлять|вернуть).*$",
     flags=re.IGNORECASE | re.MULTILINE,
 )
+PUNCT_ONLY_RE = re.compile(r"^[\s\d,.;:()/%×\-–—_+\\[\]{}<>|]+$")
+MEANINGFUL_TOKEN_RE = re.compile(r"[А-Яа-яЁёA-Za-z]+")
+
+FULLWIDTH_PUNCT_MAP = str.maketrans(
+    {
+        "（": "(",
+        "）": ")",
+        "：": ":",
+        "，": ",",
+        "；": ";",
+        "。": ".",
+        "＋": "+",
+        "、": ",",
+    }
+)
 
 PHRASE_REPLACEMENTS = {
-    "车间门": "дверь цеха",
-    "以钢构柱面为准": "по грани стальной колонны",
-    "600x400方井": "600x400 квадратный колодец",
-    "600X400方井": "600x400 квадратный колодец",
-    "也可以圆井": "допускается круглый колодец",
-    "行车牛腿": "подкрановая консоль",
-    "喷雾机水与模具冷凝污水沟": "лоток сточных вод от распылительной установки и конденсата форм",
+    "从原料到成品": "от сырья до готовой продукции",
+    "从原料到产品": "от сырья до готовой продукции",
+    "铝材标准工业流程": "стандартный промышленный процесс алюминиевых изделий",
+    "标准工业流程": "стандартный промышленный процесс",
+    "工业流程说明": "описание промышленного процесса",
+    "能源:电,天然气,水,压缩空气.": "Энергоносители: электроэнергия, природный газ, вода, сжатый воздух.",
+    "能源: 电, 天然气, 水, 压缩空气.": "Энергоносители: электроэнергия, природный газ, вода, сжатый воздух.",
+    "1:熔炼:铝锭+废料投入熔铸炉熔炼.": "1: Плавка: алюминиевый слиток и отходы загружаются в плавильно-литейную печь на плавку.",
+    "1: 熔炼: 铝锭+废料投入熔铸炉熔炼.": "1: Плавка: алюминиевый слиток и отходы загружаются в плавильно-литейную печь на плавку.",
+    "600x400方井": "600×400 квадратный смотровой колодец",
+    "600X400方井": "600×400 квадратный смотровой колодец",
+    "也可以圆井": "допускается устройство круглого смотрового колодца",
+    "喷雾机水与模具冷凝污水沟": "лоток отвода сточных вод от распылительной установки и конденсата форм",
+    "排水沟外围300mm以上水泥浇筑": "бетонная подготовка по периметру водоотводного лотка шириной не менее 300 мм",
     "深度200mm": "глубина 200 мм",
-    "排水沟外围300mm以上水泥浇筑": "бетонная заливка по периметру водоотводного лотка шириной не менее 300 мм",
-    "方井": "квадратный колодец",
-    "圆井": "круглый колодец",
-    "污水沟": "лоток сточных вод",
-    "排水沟": "водоотводный лоток",
-    "钢构柱": "стальная колонна",
-    "柱面": "грань колонны",
-    "喷雾机": "распылительная установка",
-    "模具": "форма",
-    "冷凝": "конденсат",
-    "牛腿": "консоль",
-    "行车": "мостовой кран",
-    "车间": "цех",
-    "门": "дверь",
-    "基础": "фундамент",
+    "以钢构柱面为准": "привязать по грани стальной колонны",
+    "车间门": "дверь цеха",
+    "行车牛腿": "подкрановая консоль",
+    "建筑铝材": "архитектурные алюминиевые конструкции",
+    "工业铝材": "промышленные алюминиевые изделия",
 }
 
 TOKEN_REPLACEMENTS = {
-    "镀锌管": "оцинкованная труба",
-    "井": "колодец",
-    "泵": "насос",
-    "管": "труба",
-    "阀": "клапан",
-    "沟": "лоток",
-    "污水": "сточные воды",
-    "雨水": "дождевые воды",
-    "柱": "колонна",
-    "梁": "балка",
+    "能源": "Энергоносители",
+    "电": "электроэнергия",
+    "天然气": "природный газ",
+    "水": "вода",
+    "压缩空气": "сжатый воздух",
+    "原料": "сырье",
+    "主要原料": "основное сырье",
+    "辅料": "вспомогательные материалы",
+    "熔铸工段": "литейный участок",
+    "熔铸": "литейный участок",
+    "工段": "участок",
+    "熔炼": "плавка",
+    "铝锭": "алюминиевый слиток",
+    "废料": "отходы",
+    "废铝": "алюминиевый лом",
+    "投入": "загружаются",
+    "熔铸炉": "плавильно-литейная печь",
+    "镁": "магний",
+    "硅": "кремний",
+    "合金元素": "легирующие элементы",
+    "精炼剂": "рафинирующая добавка",
+    "覆盖剂": "покровный флюс",
+    "溶剂": "растворитель",
+    "时效热处理": "термообработка старением",
+    "保温": "выдержка",
+    "提高硬度": "повышение твердости",
+    "建筑铝材": "архитектурные алюминиевые конструкции",
+    "工业铝材": "промышленные алюминиевые изделия",
+    "门窗": "дверные и оконные конструкции",
+    "幕墙": "витражные фасады",
+    "阳光房": "зимние сады",
+    "设备框架": "каркасы оборудования",
+    "光伏支架": "опоры фотоэлектрических панелей",
+    "汽车件": "автомобильные комплектующие",
+    "废弃物": "отходы",
+    "排放物": "выбросы",
+    "全流程": "всего процесса",
+    "产生": "образуется",
+    "铝灰": "алюминиевая зола",
+    "铝渣": "алюминиевый шлак",
+    "方井": "квадратный смотровой колодец",
+    "圆井": "круглый смотровой колодец",
+    "污水沟": "лоток сточных вод",
+    "排水沟": "водоотводный лоток",
 }
 
 MIXED_OUTPUT_REPLACEMENTS = {
-    "квадратная яма": "квадратный колодец",
-    "круглая яма": "круглый колодец",
-    "также можно круглая яма": "допускается круглый колодец",
+    "квадратная яма": "квадратный смотровой колодец",
+    "круглая яма": "круглый смотровой колодец",
     "входные двери цеха": "дверь цеха",
-    "ножки行车": "подкрановая консоль",
-    "ножки行车腿": "подкрановая консоль",
-    "water spray": "распылительная установка",
     "spray machine": "распылительная установка",
-    "spray": "распылительная",
+    "water spray": "распылительная установка",
 }
 
 
 def has_chinese(text):
-    return bool(CHINESE_RE.search(str(text)))
+    return bool(CHINESE_FRAGMENT_RE.search(str(text)))
 
 
 def _apply_mapping(text, mapping):
@@ -78,11 +122,40 @@ def _apply_mapping(text, mapping):
     return value
 
 
-def replace_known_terms(text):
-    value = _apply_mapping(text, PHRASE_REPLACEMENTS)
-    value = _apply_mapping(value, TOKEN_REPLACEMENTS)
-    value = _apply_mapping(value, MIXED_OUTPUT_REPLACEMENTS)
-    return value
+def normalize_punctuation(text):
+    value = str(text).translate(FULLWIDTH_PUNCT_MAP)
+    value = value.replace("_", " ")
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"\(\s+", "(", value)
+    value = re.sub(r"\s+\)", ")", value)
+    value = re.sub(r"\s*([:;,])\s*", r"\1 ", value)
+    value = re.sub(r"\s*\.\s*", ". ", value)
+    value = re.sub(r"\s*\+\s*", " + ", value)
+    value = re.sub(r"(?<=\d)([А-Яа-яЁёA-Za-z])", r" \1", value)
+    value = re.sub(r"(?<=\d)(\()", r" \1", value)
+    value = re.sub(r"(?<=[А-Яа-яЁё])(?=\d)", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"\s+([,.;:)])", r"\1", value)
+    value = value.strip(" -_")
+    return value.strip()
+
+
+def _build_residual_dictionary(section=None):
+    merged = {}
+    merged.update(PHRASE_REPLACEMENTS)
+    merged.update(TOKEN_REPLACEMENTS)
+    merged.update(MIXED_OUTPUT_REPLACEMENTS)
+    section_name = str(section or "").strip()
+    if section_name:
+        merged.update(build_section_term_map(section_name))
+    return merged
+
+
+def replace_known_terms(text, section=None):
+    value = normalize_punctuation(text)
+    mapping = _build_residual_dictionary(section)
+    value = _apply_mapping(value, mapping)
+    return normalize_punctuation(value)
 
 
 def strip_prompt_leak(text):
@@ -101,15 +174,77 @@ def strip_prompt_leak(text):
     return value.strip()
 
 
-def cleanup_translation(text):
-    value = strip_prompt_leak(str(text).strip())
-    value = replace_known_terms(value)
+def _meaningful_token_count(text):
+    return len(MEANINGFUL_TOKEN_RE.findall(str(text)))
 
-    # Remove leftover isolated Chinese symbols after phrase substitutions.
-    value = CHINESE_RE.sub(" ", value)
-    value = value.replace("_", " ")
-    value = re.sub(r"\s+", " ", value)
-    value = re.sub(r"\s+([,.;:])", r"\1", value)
-    value = value.strip(" -_")
 
+def _fragment_from_dict(fragment, mapping):
+    value = _apply_mapping(fragment, mapping)
+    return value
+
+
+def replace_residual_chinese(text, section=None):
+    mapping = _build_residual_dictionary(section)
+    value = normalize_punctuation(text)
+
+    def repl(match):
+        fragment = match.group(0)
+        translated = _fragment_from_dict(fragment, mapping)
+        return translated
+
+    value = CHINESE_FRAGMENT_RE.sub(repl, value)
+    return normalize_punctuation(value)
+
+
+def _source_has_structural_density(source_text):
+    source_text = str(source_text)
+    return (
+        source_text.count("，") + source_text.count(",") >= 2
+        or "（" in source_text
+        or "(" in source_text
+        or bool(re.search(r"\d[\u4e00-\u9fff]", source_text))
+        or "：" in source_text
+        or ":" in source_text
+    )
+
+
+def _candidate_is_thin(source_text, candidate_text):
+    source_text = str(source_text).strip()
+    candidate_text = str(candidate_text).strip()
+    if not candidate_text:
+        return True
+    if PUNCT_ONLY_RE.match(candidate_text):
+        return True
+    if _source_has_structural_density(source_text) and _meaningful_token_count(candidate_text) < 3:
+        return True
+    return False
+
+
+def finalize_translation(source_text, translated_text, section=None):
+    source_text = normalize_punctuation(str(source_text).strip())
+    section_name = section or detect_section_for_text(source_text)
+    value = strip_prompt_leak(str(translated_text).strip())
+    value = normalize_punctuation(value)
+    value = replace_known_terms(value, section_name)
+    value = replace_residual_chinese(value, section_name)
+
+    if _candidate_is_thin(source_text, value):
+        rebuilt = translate_structured_cn_text(source_text, section_name)
+        rebuilt = replace_known_terms(rebuilt, section_name)
+        rebuilt = replace_residual_chinese(rebuilt, section_name)
+        if _meaningful_token_count(rebuilt) > _meaningful_token_count(value):
+            value = rebuilt
+
+    value = normalize_punctuation(value)
+
+    qc_flags = []
+    untranslated = has_chinese(value)
+    if untranslated:
+        qc_flags.append("needs_manual_review")
+
+    return value, untranslated, qc_flags
+
+
+def cleanup_translation(text, section=None):
+    value, _, _ = finalize_translation("", text, section)
     return value

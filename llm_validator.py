@@ -4,7 +4,7 @@ import re
 
 import requests
 
-from post_translate_fix import cleanup_translation, has_chinese
+from post_translate_fix import finalize_translation, has_chinese
 from translator_hybrid import _looks_suspicious
 
 
@@ -113,10 +113,10 @@ def _review_one(source_text, current_translation, section="UNKNOWN"):
     )
 
     try:
-        candidate = cleanup_translation(_generate(prompt))
+        candidate, _, _ = finalize_translation(source_text, _generate(prompt), section)
     except Exception as exc:
         LOGGER.warning("LLM validator failed: %s", exc)
-        return current_translation, False
+        return current_translation, False, "request_failed"
 
     if not candidate:
         return current_translation, False, "empty_response"
