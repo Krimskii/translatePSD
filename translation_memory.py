@@ -1,5 +1,11 @@
 import json
 import os
+import re
+
+
+CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
+CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+PUNCT_ONLY_RE = re.compile(r"^[\s\d,.;:()/%×\-–—_:+*\\[\]{}<>|]+$")
 
 
 MEMORY_PATH = os.getenv("TRANSLATION_MEMORY_PATH", "dictionary/translation_memory.json")
@@ -69,3 +75,34 @@ def update_memory_entry_in_store(memory, text, translated, section=None):
 
     memory[make_key(source_text, section)] = translated_text
     return memory
+
+
+def _looks_bad_translation(value):
+    text = str(value).strip()
+    if not text:
+        return True
+    if PUNCT_ONLY_RE.match(text):
+        return True
+    if len(text) <= 2:
+        return True
+    if CHINESE_RE.search(text):
+        return True
+    if not CYRILLIC_RE.search(text) and len(text) < 12:
+        return True
+    return False
+
+
+def clean_memory(memory=None):
+    store = load_memory() if memory is None else dict(memory)
+    cleaned = {}
+    removed = 0
+
+    for key, value in store.items():
+        if _looks_bad_translation(value):
+            removed += 1
+            continue
+        cleaned[key] = str(value).strip()
+
+    if memory is None:
+        save_memory(cleaned)
+    return cleaned, removed

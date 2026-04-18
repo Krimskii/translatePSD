@@ -1,6 +1,9 @@
 def detect_section(text):
     text = str(text)
 
+    if any(token in text for token in ["工艺", "流程", "原料", "熔铸", "挤压", "时效", "表面处理", "包装", "能耗", "能源"]):
+        return "ТХ"
+
     if "电气" in text:
         return "ЭОМ"
 

@@ -6,6 +6,7 @@ from apply_cad_dict import apply_cad_dict
 from post_translate_fix import cleanup_translation, has_chinese
 from section_dictionary import apply_section_terms, detect_section_for_text
 from translation_memory import (
+    clean_memory,
     get_memory_translation_from_store,
     load_memory,
     save_memory,
@@ -19,6 +20,7 @@ LOGGER = logging.getLogger(__name__)
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 LATIN_ONLY_RE = re.compile(r"^[A-Za-z0-9\s,.;:()/%×\-–—_]+$")
 PUNCT_ONLY_RE = re.compile(r"^[\s\d,.;:()/%×\-–—_]+$")
+MEANINGFUL_TOKEN_RE = re.compile(r"[А-Яа-яЁёA-Za-z]+")
 
 
 def _cyrillic_ratio(text):
@@ -74,6 +76,25 @@ def _looks_suspicious(source_text, candidate):
     return False
 
 
+def _meaningful_content_ratio(text):
+    value = str(text).strip()
+    if not value:
+        return 0.0
+    meaningful = sum(len(token) for token in MEANINGFUL_TOKEN_RE.findall(value))
+    return meaningful / max(len(value), 1)
+
+
+def _accept_dictionary_result(source_text, candidate, *, section):
+    candidate = cleanup_translation(str(candidate).strip())
+    if _looks_suspicious(source_text, candidate):
+        return False
+    if _meaningful_content_ratio(candidate) < 0.35:
+        return False
+    if section == "UNKNOWN" and _meaningful_content_ratio(candidate) < 0.5:
+        return False
+    return len(candidate) >= max(4, int(len(str(source_text).strip()) * 0.18))
+
+
 def _should_use_deepseek_first(text):
     value = str(text).strip()
     if not deepseek_available() or not has_chinese(value):
@@ -95,7 +116,7 @@ def _memory_first_candidate(source_text, section, memory):
 
     source_with_terms = cleanup_translation(apply_section_terms(source_text, section))
     short_label = len(source_text) <= 40
-    if short_label and source_with_terms != source_text and not _looks_suspicious(source_text, source_with_terms):
+    if short_label and source_with_terms != source_text and _accept_dictionary_result(source_text, source_with_terms, section=section):
         return source_with_terms, "section_dict"
 
     return None, None
@@ -107,7 +128,7 @@ def _dictionary_fallback(source_text, section):
     dict_text = cleanup_translation(apply_section_terms(apply_cad_dict(source_text), section))
 
     for candidate in (section_text, dict_text):
-        if candidate != source_text and not _looks_suspicious(source_text, candidate):
+        if candidate != source_text and _accept_dictionary_result(source_text, candidate, section=section):
             return candidate, "section_dict"
 
     return None, None
@@ -192,7 +213,9 @@ def translate_df(df):
     texts = [str(text).strip()[:1400] for text in working_df["text"].astype(str).tolist()]
     total = len(texts)
     sections = [detect_section_for_text(text) for text in texts]
-    memory = load_memory()
+    memory, removed_bad_memory = clean_memory(load_memory())
+    if removed_bad_memory:
+        LOGGER.info("Removed %s bad translation-memory entries", removed_bad_memory)
     translated = [None] * total
     sources = [None] * total
     untranslated = [False] * total
