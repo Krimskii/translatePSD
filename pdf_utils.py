@@ -16,6 +16,64 @@ class PdfTextBlock:
     align: int
 
 
+def _normalize_text(text: str) -> str:
+    return " ".join(str(text).split()).strip().lower()
+
+
+def _bbox_distance(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    return max(abs(ax0 - bx0), abs(ay0 - by0), abs(ax1 - bx1), abs(ay1 - by1))
+
+
+def _merge_block_sets(primary: list[PdfTextBlock], extra: list[PdfTextBlock]) -> list[PdfTextBlock]:
+    merged = list(primary)
+
+    for block in extra:
+        norm_text = _normalize_text(block.text)
+        if not norm_text:
+            continue
+
+        duplicate = False
+        replacement_index = None
+
+        for index, existing in enumerate(merged):
+            existing_norm = _normalize_text(existing.text)
+            same_spot = _bbox_distance(existing.bbox, block.bbox) <= 8.0
+
+            if same_spot and existing_norm == norm_text:
+                duplicate = True
+                break
+
+            if same_spot and existing_norm and norm_text and (
+                norm_text in existing_norm or existing_norm in norm_text
+            ):
+                if len(norm_text) > len(existing_norm):
+                    replacement_index = index
+                else:
+                    duplicate = True
+                break
+
+        if duplicate:
+            continue
+
+        if replacement_index is not None:
+            merged[replacement_index] = block
+        else:
+            merged.append(block)
+
+    return sorted(merged, key=lambda item: (item.page_index, item.bbox[1], item.bbox[0]))
+
+
+def _page_is_sparse(blocks: list[PdfTextBlock]) -> bool:
+    if not blocks:
+        return True
+
+    line_count = len(blocks)
+    total_chars = sum(len(str(block.text).strip()) for block in blocks)
+    return line_count < 30 or total_chars < 500
+
+
 def _line_blocks_from_words(words, page_index: int) -> list[PdfTextBlock]:
     if not words:
         return []
@@ -271,10 +329,11 @@ def extract_pdf_blocks(src) -> list[PdfTextBlock]:
             page_dict = page.get_text("dict")
             page_blocks = _page_dict_to_blocks(page_dict, page_index)
 
-            if not page_blocks:
-                page_blocks.extend(_ocr_blocks_from_page(page, page_index))
-            if not page_blocks:
-                page_blocks.extend(_ocr_blocks_from_textpage(page, page_index))
+            if _page_is_sparse(page_blocks):
+                page_blocks = _merge_block_sets(page_blocks, _ocr_blocks_from_page(page, page_index))
+
+            if _page_is_sparse(page_blocks):
+                page_blocks = _merge_block_sets(page_blocks, _ocr_blocks_from_textpage(page, page_index))
 
             blocks.extend(page_blocks)
     finally:
