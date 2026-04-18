@@ -199,6 +199,12 @@ if uploaded_files:
                 else:
                     st.info("LLM не нашел строк для безопасной коррекции.")
 
+        if st.button("Финальный LLM QC"):
+            with st.spinner("Финальная LLM-проверка всего документа..."):
+                st.session_state.df, edited = llm_validate_and_edit_df(st.session_state.df.copy(), only_flagged=False)
+                checked = len(st.session_state.df)
+                st.success(f"LLM проверил строк: {checked}, скорректировал: {edited}")
+
         if st.button("Проверить СН РК"):
             report = validate_df(st.session_state.df)
             st.dataframe(report)
