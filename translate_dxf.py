@@ -1,97 +1,69 @@
-import re
+import logging
+from pathlib import Path
 
 import ezdxf
 import pandas as pd
 
-from cad_dict_full import DICT
+from parser_dxf_block import CHINESE_RE, extract_text_records
 from translator_hybrid import translate_df
+from writer_dxf_blocks import write_translated_dxf
 
 
-def extract_clean_text(raw):
-    if raw is None:
-        return ""
-
-    raw = str(raw)
-    match = re.search(r";(.*?)\}", raw)
-    if match:
-        return match.group(1)
-
-    return raw
+LOGGER = logging.getLogger(__name__)
 
 
-def inject_back(raw, translated):
-    raw = str(raw)
-    translated = str(translated)
+def _records_to_frame(records):
+    return pd.DataFrame(
+        [
+            {
+                "handle": record.handle,
+                "entity_type": record.entity_type,
+                "owner": record.owner,
+                "layer": record.layer,
+                "block_name": record.block_name,
+                "layout_name": record.layout_name,
+                "text": record.text,
+                "raw_text": record.raw_text,
+                "notes": record.notes,
+            }
+            for record in records
+        ]
+    )
 
-    if "{" in raw and ";" in raw:
-        return re.sub(r";(.*?)\}", f";{translated}}}", raw)
 
-    return translated
-
-
-def apply_dict(text):
-    value = str(text)
-    for key, replacement in DICT.items():
-        value = value.replace(key, replacement)
-    return value
-
-
-def _read_entity_text(entity):
-    entity_type = entity.dxftype()
-
-    if entity_type == "TEXT":
-        raw = entity.dxf.text
-    elif entity_type == "MTEXT":
-        raw = entity.text
-    elif entity_type == "ATTRIB":
-        raw = entity.dxf.text
-    else:
-        return None
-
-    return entity_type, raw, extract_clean_text(raw)
+def _build_qc_report(df, dst_path):
+    report = df.copy()
+    report["still_has_chinese"] = report["translated"].astype(str).str.contains(CHINESE_RE)
+    report["source_has_chinese"] = report["text"].astype(str).str.contains(CHINESE_RE)
+    report["needs_ocr"] = report["text"].astype(str).eq("")
+    report_path = Path(dst_path).with_suffix(".report.xlsx")
+    try:
+        report.to_excel(report_path, index=False)
+        LOGGER.info("DXF QC report written to %s", report_path)
+    except Exception as exc:
+        LOGGER.warning("Unable to write DXF QC report: %s", exc)
 
 
 def translate_dxf(src, dst):
-    print("DXF:", src)
-
+    LOGGER.info("Reading DXF %s", src)
     doc = ezdxf.readfile(src)
-    msp = doc.modelspace()
-    rows = []
+    records = extract_text_records(doc)
+    LOGGER.info("DXF text records found: %s", len(records))
 
-    for entity in msp:
-        try:
-            parsed = _read_entity_text(entity)
-        except AttributeError:
-            continue
-
-        if parsed is None:
-            continue
-
-        entity_type, raw, clean = parsed
-        rows.append((entity, entity_type, raw, clean))
-
-    print("entities:", len(rows))
-
-    if not rows:
-        print("no text")
+    if not records:
         doc.saveas(dst)
-        return
+        return {"found": 0, "translated": 0, "untranslated": 0}
 
-    texts = [row[3][:200] for row in rows]
-    df = pd.DataFrame({"text": texts})
-    df = translate_df(df)
-    translated = [apply_dict(text) for text in df["translated"].tolist()]
+    frame = _records_to_frame(records)
+    translated_df = translate_df(frame)
+    write_translated_dxf(src, dst, translated_df)
+    untranslated_count = int(translated_df["untranslated_chinese"].fillna(False).sum())
+    _build_qc_report(translated_df, dst)
 
-    for entity, entity_type, raw, _clean in rows:
-        new_text = inject_back(raw, translated.pop(0))
-
-        try:
-            if entity_type in {"TEXT", "ATTRIB"}:
-                entity.dxf.text = new_text
-            elif entity_type == "MTEXT":
-                entity.text = new_text
-        except AttributeError:
-            continue
-
-    doc.saveas(dst)
-    print("saved:", dst)
+    summary = {
+        "found": len(translated_df),
+        "translated": int((translated_df["translated"].astype(str).str.strip() != "").sum()),
+        "untranslated": untranslated_count,
+    }
+    LOGGER.info("DXF translation summary: %s", summary)
+    return summary

@@ -1,6 +1,5 @@
+import logging
 import re
-
-import pandas as pd
 
 from normative_dictionary import sync_normative_candidates
 from apply_cad_dict import apply_cad_dict
@@ -16,7 +15,9 @@ from translator_batch import ollama_batch, ollama_translate_one
 from translator_deepseek import deepseek_available, deepseek_translate
 
 
+LOGGER = logging.getLogger(__name__)
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+LATIN_ONLY_RE = re.compile(r"^[A-Za-z0-9\s,.;:()/%×\-–—_]+$")
 PUNCT_ONLY_RE = re.compile(r"^[\s\d,.;:()/%×\-–—_]+$")
 
 
@@ -28,92 +29,118 @@ def _cyrillic_ratio(text):
     return cyr / max(len(value), 1)
 
 
+def _looks_model_explanatory(candidate):
+    lowered = str(candidate).strip().lower()
+    prefixes = (
+        "перевод:",
+        "translation:",
+        "here is",
+        "объяснение",
+        "note:",
+        "примечание:",
+    )
+    return lowered.startswith(prefixes)
+
+
 def _looks_suspicious(source_text, candidate):
-    source_text = str(source_text)
-    candidate = str(candidate).strip()
+    source_text = str(source_text).strip()
+    candidate = cleanup_translation(str(candidate).strip())
 
     if not candidate:
         return True
-
+    if _looks_model_explanatory(candidate):
+        return True
     if PUNCT_ONLY_RE.match(candidate):
         return True
 
-    if has_chinese(candidate):
+    source_has_chinese = has_chinese(source_text)
+    candidate_has_chinese = has_chinese(candidate)
+
+    if candidate_has_chinese and source_has_chinese:
+        return True
+    if candidate_has_chinese and not source_has_chinese:
         return True
 
-    if has_chinese(source_text):
-        source_len = len(source_text.strip())
-        candidate_len = len(candidate)
+    source_len = len(source_text)
+    candidate_len = len(candidate)
 
-        if source_len >= 20 and candidate_len < max(8, int(source_len * 0.2)):
-            return True
-
-        if source_len >= 20 and _cyrillic_ratio(candidate) < 0.12:
-            return True
+    if source_has_chinese and source_len >= 20 and candidate_len < max(8, int(source_len * 0.22)):
+        return True
+    if source_has_chinese and source_len >= 20 and _cyrillic_ratio(candidate) < 0.12:
+        return True
+    if source_has_chinese and LATIN_ONLY_RE.match(candidate) and _cyrillic_ratio(candidate) == 0:
+        return True
 
     return False
 
 
 def _should_use_deepseek_first(text):
     value = str(text).strip()
-    if not deepseek_available():
+    if not deepseek_available() or not has_chinese(value):
         return False
-
-    if not has_chinese(value):
-        return False
-
-    if len(value) >= 180:
+    if len(value) >= 200:
         return True
-
-    if value.count("，") + value.count(",") >= 4:
+    if value.count("，") + value.count(",") >= 5:
         return True
-
     if value.count("。") + value.count(";") + value.count("；") >= 2:
         return True
-
-    if "\n" in value and len(value) >= 120:
-        return True
-
-    return False
+    return "\n" in value and len(value) >= 120
 
 
 def _memory_first_candidate(source_text, section, memory):
-    source_text = str(source_text)
+    source_text = str(source_text).strip()
     memory_hit = get_memory_translation_from_store(memory, source_text, section)
     if memory_hit:
-        return memory_hit, "memory"
+        return cleanup_translation(memory_hit), "memory"
 
     source_with_terms = cleanup_translation(apply_section_terms(source_text, section))
-    short_label = len(source_text.strip()) <= 40
-
+    short_label = len(source_text) <= 40
     if short_label and source_with_terms != source_text and not _looks_suspicious(source_text, source_with_terms):
         return source_with_terms, "section_dict"
 
     return None, None
 
 
+def _dictionary_fallback(source_text, section):
+    source_text = str(source_text).strip()
+    section_text = cleanup_translation(apply_section_terms(source_text, section))
+    dict_text = cleanup_translation(apply_section_terms(apply_cad_dict(source_text), section))
+
+    for candidate in (section_text, dict_text):
+        if candidate != source_text and not _looks_suspicious(source_text, candidate):
+            return candidate, "section_dict"
+
+    return None, None
+
+
+def _deepseek_candidate(source_text, section):
+    if not deepseek_available():
+        return None, None
+
+    try:
+        candidate = cleanup_translation(apply_section_terms(deepseek_translate(source_text), section))
+    except Exception as exc:
+        LOGGER.warning("DeepSeek translation failed: %s", exc)
+        return None, None
+
+    if _looks_suspicious(source_text, candidate):
+        return None, None
+    return candidate, "deepseek"
+
+
 def _translate_one(source_text, model_text, section, memory):
-    source_text = str(source_text)
+    source_text = str(source_text).strip()
     memory_candidate, memory_source = _memory_first_candidate(source_text, section, memory)
     if memory_candidate:
         return memory_candidate, memory_source
 
-    source_with_terms = apply_section_terms(source_text, section)
-
     if _should_use_deepseek_first(source_text):
-        try:
-            deepseek_text = cleanup_translation(apply_section_terms(deepseek_translate(source_text), section))
-            if not _looks_suspicious(source_text, deepseek_text):
-                update_memory_entry_in_store(memory, source_text, deepseek_text, section)
-                return deepseek_text, "deepseek"
-        except Exception as e:
-            print("deepseek preflight error:", e)
+        deepseek_text, source_name = _deepseek_candidate(source_text, section)
+        if deepseek_text:
+            update_memory_entry_in_store(memory, source_text, deepseek_text, section)
+            return deepseek_text, source_name
 
     candidate = cleanup_translation(apply_section_terms(model_text, section))
-
-    if not candidate:
-        candidate = source_with_terms
-
     if not _looks_suspicious(source_text, candidate):
         update_memory_entry_in_store(memory, source_text, candidate, section)
         return candidate, "ollama"
@@ -123,26 +150,17 @@ def _translate_one(source_text, model_text, section, memory):
         update_memory_entry_in_store(memory, source_text, retry_text, section)
         return retry_text, "ollama_retry"
 
-    dict_fallback = cleanup_translation(apply_section_terms(apply_cad_dict(source_text), section))
-    short_label = len(source_text) <= 30
-    if short_label and dict_fallback != source_text and not _looks_suspicious(source_text, dict_fallback):
-        update_memory_entry_in_store(memory, source_text, dict_fallback, section)
-        return dict_fallback, "section_dict"
+    deepseek_text, deepseek_source = _deepseek_candidate(source_text, section)
+    if deepseek_text:
+        update_memory_entry_in_store(memory, source_text, deepseek_text, section)
+        return deepseek_text, deepseek_source
 
-    if deepseek_available():
-        try:
-            deepseek_text = cleanup_translation(apply_section_terms(deepseek_translate(source_text), section))
-            if not _looks_suspicious(source_text, deepseek_text):
-                update_memory_entry_in_store(memory, source_text, deepseek_text, section)
-                return deepseek_text, "deepseek"
-        except Exception as e:
-            print("deepseek error:", e)
+    dict_text, dict_source = _dictionary_fallback(source_text, section)
+    if dict_text:
+        update_memory_entry_in_store(memory, source_text, dict_text, section)
+        return dict_text, dict_source
 
-    if short_label and dict_fallback != source_text:
-        update_memory_entry_in_store(memory, source_text, dict_fallback, section)
-        return dict_fallback, "section_dict"
-
-    final_value = retry_text if retry_text.strip() else candidate
+    final_value = retry_text if retry_text.strip() else candidate or source_text
     update_memory_entry_in_store(memory, source_text, final_value, section)
     return final_value, "fallback"
 
@@ -151,21 +169,34 @@ def _resolve_batch_size(texts):
     max_len = max((len(t) for t in texts), default=0)
     avg_len = (sum(len(t) for t in texts) / len(texts)) if texts else 0
 
-    if max_len >= 500 or avg_len >= 220:
+    if max_len >= 700 or avg_len >= 260:
+        return 2
+    if max_len >= 420 or avg_len >= 180:
         return 3
-    if max_len >= 280 or avg_len >= 140:
+    if max_len >= 260 or avg_len >= 120:
         return 5
     return 8
 
 
+def _collect_qc_flags(source_text, translated_text):
+    flags = []
+    if has_chinese(translated_text):
+        flags.append("contains_chinese")
+    if _looks_suspicious(source_text, translated_text):
+        flags.append("low_quality")
+    return ",".join(flags)
+
+
 def translate_df(df):
-    texts = df["text"].astype(str).tolist()
-    texts = [t[:1200] for t in texts]
+    working_df = df.copy()
+    texts = [str(text).strip()[:1400] for text in working_df["text"].astype(str).tolist()]
     total = len(texts)
     sections = [detect_section_for_text(text) for text in texts]
     memory = load_memory()
     translated = [None] * total
     sources = [None] * total
+    untranslated = [False] * total
+    qc_flags = [""] * total
     unique_pending = []
     unique_index = {}
 
@@ -174,6 +205,8 @@ def translate_df(df):
         if cached_text:
             translated[idx] = cached_text
             sources[idx] = cached_source
+            untranslated[idx] = has_chinese(cached_text)
+            qc_flags[idx] = _collect_qc_flags(text, cached_text)
             continue
 
         key = (section, text)
@@ -185,36 +218,49 @@ def translate_df(df):
 
     pending_texts = [item["text"] for item in unique_pending]
     batch_size = _resolve_batch_size(pending_texts)
+    LOGGER.info("Translating %s unique rows with batch size %s", len(unique_pending), batch_size)
 
     for i in range(0, len(unique_pending), batch_size):
-        print(f"batch {i} / {len(unique_pending)}")
         batch_items = unique_pending[i : i + batch_size]
         batch = [item["text"] for item in batch_items]
+        LOGGER.info("batch %s / %s", i, len(unique_pending))
 
         try:
-            result = ollama_batch(batch)
-        except Exception as e:
-            print("ollama error:", e)
-            result = batch
+            model_results = ollama_batch(batch)
+        except Exception as exc:
+            LOGGER.warning("Ollama batch failed: %s", exc)
+            model_results = batch
 
-        if len(result) != len(batch):
-            result = batch
+        if len(model_results) != len(batch):
+            LOGGER.warning("Batch size mismatch from model: %s != %s", len(model_results), len(batch))
+            model_results = batch
 
-        for item, model_text in zip(batch_items, result):
+        for item, model_text in zip(batch_items, model_results):
             translated_text, source_name = _translate_one(item["text"], model_text, item["section"], memory)
+            flags = _collect_qc_flags(item["text"], translated_text)
+            has_leftover = has_chinese(translated_text)
+
             for row_idx in item["rows"]:
                 translated[row_idx] = translated_text
                 sources[row_idx] = source_name if row_idx == item["rows"][0] else f"{source_name}_duplicate"
+                untranslated[row_idx] = has_leftover
+                qc_flags[row_idx] = flags
 
-    for idx, original in enumerate(df["text"].tolist()):
+    for idx, original in enumerate(texts):
         if translated[idx] is None:
             translated[idx] = original
         if sources[idx] is None:
             sources[idx] = "fallback"
+        if not qc_flags[idx]:
+            qc_flags[idx] = _collect_qc_flags(original, translated[idx])
+        untranslated[idx] = has_chinese(translated[idx])
 
     save_memory(memory)
-    df["translated"] = translated
-    df["section"] = sections
-    df["translation_source"] = sources
-    sync_normative_candidates(df)
-    return df
+    working_df["text"] = texts
+    working_df["translated"] = translated
+    working_df["section"] = sections
+    working_df["translation_source"] = sources
+    working_df["untranslated_chinese"] = untranslated
+    working_df["qc_flags"] = qc_flags
+    sync_normative_candidates(working_df)
+    return working_df

@@ -287,10 +287,13 @@ def detect_text_boxes(img_path, *, merge=True, min_score=0.2, min_size=6):
 
     raw_lines = []
     for prepared in _prepare_images(img):
-        result = _run_ocr(prepared)
-        raw_lines = _extract_lines(result)
-        if raw_lines:
-            break
+        try:
+            result = _run_ocr(prepared)
+            raw_lines = _extract_lines(result)
+            if raw_lines:
+                break
+        except Exception:
+            raw_lines = []
 
     if not raw_lines:
         raw_lines = _tesseract_tsv_lines(img_path)
