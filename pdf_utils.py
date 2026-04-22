@@ -86,6 +86,8 @@ def _looks_like_ocr_noise(text):
     value = " ".join(str(text).split()).strip()
     if not value:
         return True
+    if has_chinese(value):
+        return False
     if len(value) <= 1:
         return True
     if value.count("?") >= 3:
@@ -129,6 +131,31 @@ def _merge_block_sets(primary, extra):
             merged.append(block)
 
     return sorted(merged, key=lambda item: (item.page_index, item.bbox[1], item.bbox[0]))
+
+
+def _block_area(block):
+    x0, y0, x1, y1 = block.bbox
+    return max(x1 - x0, 0.0) * max(y1 - y0, 0.0)
+
+
+def _drop_near_duplicate_blocks(blocks):
+    cleaned = []
+    for block in sorted(blocks, key=lambda item: (item.page_index, item.bbox[1], item.bbox[0], -len(item.text))):
+        norm = _normalize_text(block.text)
+        if not norm:
+            continue
+        duplicate = False
+        for existing in cleaned:
+            if existing.page_index != block.page_index:
+                continue
+            same_spot = _bbox_distance(existing.bbox, block.bbox) <= 5.0
+            existing_norm = _normalize_text(existing.text)
+            if same_spot and (norm == existing_norm or norm in existing_norm or existing_norm in norm):
+                duplicate = True
+                break
+        if not duplicate:
+            cleaned.append(block)
+    return cleaned
 
 
 def _page_dict_to_blocks(page_dict, page_index):
@@ -270,6 +297,20 @@ def _ocr_blocks_from_raster(page, page_index, *, aggressive=False):
             (0, int(height * 0.72), width, height),
             (0, 0, width, int(height * 0.28)),
         ]
+        cols = 3 if aggressive else 2
+        rows = 4 if aggressive else 3
+        overlap_x = int(width * 0.03)
+        overlap_y = int(height * 0.03)
+        tile_w = max(width // cols, 1)
+        tile_h = max(height // rows, 1)
+        for row in range(rows):
+            for col in range(cols):
+                x0 = max(col * tile_w - overlap_x, 0)
+                y0 = max(row * tile_h - overlap_y, 0)
+                x1 = min((col + 1) * tile_w + overlap_x, width)
+                y1 = min((row + 1) * tile_h + overlap_y, height)
+                zones.append((x0, y0, x1, y1))
+
         zone_boxes = []
         for x0, y0, x1, y1 in zones:
             crop = image[y0:y1, x0:x1]
@@ -305,7 +346,7 @@ def _ocr_blocks_from_raster(page, page_index, *, aggressive=False):
             )
         )
 
-    return blocks
+    return _drop_near_duplicate_blocks(blocks)
 
 
 def _ocr_blocks_from_textpage(page, page_index):
@@ -378,9 +419,14 @@ def extract_pdf_blocks(source):
 
             if sparse:
                 page_blocks = _merge_block_sets(page_blocks, _ocr_blocks_from_textpage(page, page.number))
-            if sparse:
+
+            chinese_chars = sum(1 for block in page_blocks for char in block.text if has_chinese(char))
+            needs_raster = sparse or chinese_chars < 20
+            if needs_raster:
                 page_blocks = _merge_block_sets(page_blocks, _ocr_blocks_from_raster(page, page.number))
-            if len(page_blocks) < 40:
+
+            chinese_chars = sum(1 for block in page_blocks for char in block.text if has_chinese(char))
+            if len(page_blocks) < 40 or chinese_chars < 20:
                 page_blocks = _merge_block_sets(page_blocks, _ocr_blocks_from_raster(page, page.number, aggressive=True))
 
             blocks.extend(page_blocks)

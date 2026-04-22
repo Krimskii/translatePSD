@@ -99,6 +99,14 @@ from translate_project import translate_project
 translate_project("source_dir", "output_dir")
 ```
 
+### Диагностика PDF
+
+```powershell
+python inspect_pdf_blocks.py input.pdf --output pdf_blocks_report.xlsx
+```
+
+Отчёт показывает режим PDF, источник каждого блока (`text`, `ocr_textpage`, `ocr_raster`, `ocr_raster_aggressive`), страницу, bbox и наличие китайского текста.
+
 ## Ограничения
 
 - Память переводов хранится локально в `dictionary/translation_memory.json`, если не переопределить путь через `TRANSLATION_MEMORY_PATH`.
@@ -118,6 +126,7 @@ translate_project("source_dir", "output_dir")
 - Без работающего Ollama переводчик вернёт исходный текст как fallback.
 - Финальный `LLM QC` проверяет весь документ построчно и добавляет колонки `llm_validation_status` и `llm_validation_notes`.
 - Residual Chinese cleanup нормализует китайскую пунктуацию, заменяет остаточные иероглифы по словарю и выставляет `needs_manual_review` в `qc_flags`, если китайский всё же остался.
+- Для сложных PDF с чертежами и таблицами OCR объединяет PaddleOCR и Tesseract TSV, а также делает зональный и tile-проход по странице.
 
 ## Как пополнять словарь под нормы РК
 

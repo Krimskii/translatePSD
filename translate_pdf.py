@@ -6,6 +6,7 @@ import pandas as pd
 
 from dxf_utils import pick_output_text
 from pdf_utils import build_pdf_qc_report, classify_pdf_mode, extract_pdf_blocks, fit_textbox
+from post_translate_fix import has_chinese
 from translator_hybrid import translate_df
 
 
@@ -51,6 +52,8 @@ def apply_pdf_dataframe(src, dst, df):
         for block, translated in zip(blocks, translations):
             text = str(translated).strip()
             if not text:
+                continue
+            if text.strip() == str(block.text).strip() and not has_chinese(block.text):
                 continue
             rect = fitz.Rect(block.bbox)
             page = doc[block.page_index]

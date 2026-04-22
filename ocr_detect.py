@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import tempfile
 from io import StringIO
 
 import cv2
@@ -43,10 +44,56 @@ def _get_ocr():
     return _OCR
 
 
+def _bbox_to_polygon(bbox):
+    arr = np.array(bbox, dtype=float)
+    if arr.ndim == 1 and arr.size >= 4:
+        x0, y0, x1, y1 = arr[:4].tolist()
+        return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+    if arr.ndim == 2 and arr.shape[1] >= 2:
+        return arr[:, :2].tolist()
+    raise ValueError(f"Unsupported bbox shape: {arr.shape}")
+
+
 def _bbox_bounds(bbox):
-    xs = [float(point[0]) for point in bbox]
-    ys = [float(point[1]) for point in bbox]
+    polygon = _bbox_to_polygon(bbox)
+    xs = [float(point[0]) for point in polygon]
+    ys = [float(point[1]) for point in polygon]
     return min(xs), min(ys), max(xs), max(ys)
+
+
+def _bbox_iou(a, b):
+    ax0, ay0, ax1, ay1 = _bbox_bounds(a)
+    bx0, by0, bx1, by1 = _bbox_bounds(b)
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    iw, ih = max(ix1 - ix0, 0), max(iy1 - iy0, 0)
+    intersection = iw * ih
+    if intersection <= 0:
+        return 0.0
+    area_a = max((ax1 - ax0) * (ay1 - ay0), 1.0)
+    area_b = max((bx1 - bx0) * (by1 - by0), 1.0)
+    return intersection / max(area_a + area_b - intersection, 1.0)
+
+
+def _dedupe_raw_lines(lines):
+    deduped = []
+
+    for bbox, text, score in sorted(lines, key=lambda item: (-float(item[2]), len(str(item[1])))):
+        text = str(text).strip()
+        if not text:
+            continue
+
+        duplicate = False
+        for existing_bbox, existing_text, existing_score in deduped:
+            same_text = text == existing_text or text in existing_text or existing_text in text
+            if same_text and _bbox_iou(bbox, existing_bbox) >= 0.35:
+                duplicate = True
+                break
+
+        if not duplicate:
+            deduped.append((bbox, text, score))
+
+    return deduped
 
 
 def _merge_lines(lines):
@@ -257,6 +304,20 @@ def _tesseract_tsv_lines(img_path):
     return best_lines
 
 
+def _tesseract_tsv_lines_from_image(image):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        cv2.imwrite(tmp.name, image)
+        tmp_path = tmp.name
+
+    try:
+        return _tesseract_tsv_lines(tmp_path)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
 def _run_ocr(image):
     ocr = _get_ocr()
 
@@ -289,20 +350,21 @@ def detect_text_boxes(img_path, *, merge=True, min_score=0.2, min_size=6):
     for prepared in _prepare_images(img):
         try:
             result = _run_ocr(prepared)
-            raw_lines = _extract_lines(result)
-            if raw_lines:
-                break
+            raw_lines.extend(_extract_lines(result))
         except Exception:
-            raw_lines = []
+            pass
 
-    if not raw_lines:
-        raw_lines = _tesseract_tsv_lines(img_path)
+    for prepared in _prepare_images(img):
+        raw_lines.extend(_tesseract_tsv_lines_from_image(prepared))
 
     if not raw_lines:
         return []
 
+    raw_lines = _dedupe_raw_lines(raw_lines)
+
     lines = []
     for bbox, text, score in raw_lines:
+        bbox = _bbox_to_polygon(bbox)
         if scale != 1.0:
             bbox = (np.array(bbox, dtype=float) / scale).tolist()
 
