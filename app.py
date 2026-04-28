@@ -17,6 +17,7 @@ from output_names import build_ru_name
 from parser_docx import parse_docx
 from parser_pdf import parse_pdf
 from rebuild_dictionaries import rebuild_dictionary_bundle
+from translation_metrics import build_translation_metrics
 from translation_memory import clean_memory, load_memory, save_memory
 from translator_hybrid import translate_df
 from translate_docx import apply_docx_dataframe
@@ -114,6 +115,14 @@ if uploaded_files:
                         "status": result["status"],
                         "rows": result["rows"],
                         "warnings": result["warnings"],
+                        "fast_rows": result.get("fast_rows", 0),
+                        "llm_rows": result.get("llm_rows", 0),
+                        "memory_rows": result.get("memory_rows", 0),
+                        "dictionary_rows": result.get("dictionary_rows", 0),
+                        "passthrough_rows": result.get("passthrough_rows", 0),
+                        "duplicate_rows": result.get("duplicate_rows", 0),
+                        "untranslated_chinese_rows": result.get("untranslated_chinese_rows", 0),
+                        "qc_flagged_rows": result.get("qc_flagged_rows", 0),
                         "issues": result["issues"],
                     }
                     for result in results
@@ -218,6 +227,19 @@ if uploaded_files:
             disabled=disabled_columns,
             key="main_translation_editor",
         )
+
+        if "translated" in st.session_state.df.columns:
+            metrics = build_translation_metrics(st.session_state.df)
+            st.caption(
+                "Метрики перевода: "
+                f"fast={metrics['fast_rows']}, "
+                f"LLM={metrics['llm_rows']}, "
+                f"memory={metrics['memory_rows']}, "
+                f"dict={metrics['dictionary_rows']}, "
+                f"duplicates={metrics['duplicate_rows']}, "
+                f"QC={metrics['qc_flagged_rows']}, "
+                f"CN_left={metrics['untranslated_chinese_rows']}"
+            )
 
         try:
             if filename.endswith(".xlsx") or filename.endswith(".xls"):

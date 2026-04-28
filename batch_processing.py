@@ -9,6 +9,7 @@ from normalizer import normalize_df
 from output_names import build_ru_name
 from parser_docx import parse_docx
 from parser_pdf import parse_pdf
+from translation_metrics import build_translation_metrics
 from translator_hybrid import translate_df
 from translate_docx import apply_docx_dataframe
 from translate_excel import apply_excel_dataframe, workbook_to_translation_df
@@ -108,9 +109,11 @@ def process_uploaded_file(uploaded_file, *, normalize=True, validate=True):
 
         row_count = len(df)
         translated_df = translate_df(df.copy())
+        metrics = build_translation_metrics(translated_df)
 
         if normalize:
             translated_df = normalize_df(translated_df.copy())
+            metrics = build_translation_metrics(translated_df)
 
         report = validate_df(translated_df.copy()) if validate else pd.DataFrame()
         warn_count = 0 if report.empty else int((report["status"] != "OK").sum())
@@ -131,6 +134,14 @@ def process_uploaded_file(uploaded_file, *, normalize=True, validate=True):
             "status": "OK" if warn_count == 0 else "WARN",
             "rows": row_count,
             "warnings": warn_count,
+            "fast_rows": metrics["fast_rows"],
+            "llm_rows": metrics["llm_rows"],
+            "memory_rows": metrics["memory_rows"],
+            "dictionary_rows": metrics["dictionary_rows"],
+            "passthrough_rows": metrics["passthrough_rows"],
+            "duplicate_rows": metrics["duplicate_rows"],
+            "untranslated_chinese_rows": metrics["untranslated_chinese_rows"],
+            "qc_flagged_rows": metrics["qc_flagged_rows"],
             "issues": "" if report.empty else "; ".join(report.loc[report["status"] != "OK", "issues"].head(5).tolist()),
             "bytes": output_bytes,
             "report": report,
@@ -142,6 +153,14 @@ def process_uploaded_file(uploaded_file, *, normalize=True, validate=True):
             "status": "ERROR",
             "rows": 0,
             "warnings": 0,
+            "fast_rows": 0,
+            "llm_rows": 0,
+            "memory_rows": 0,
+            "dictionary_rows": 0,
+            "passthrough_rows": 0,
+            "duplicate_rows": 0,
+            "untranslated_chinese_rows": 0,
+            "qc_flagged_rows": 0,
             "issues": str(exc),
             "bytes": None,
             "report": pd.DataFrame(),
@@ -162,6 +181,14 @@ def build_batch_zip(results):
                     "status": result["status"],
                     "rows": result["rows"],
                     "warnings": result["warnings"],
+                    "fast_rows": result.get("fast_rows", 0),
+                    "llm_rows": result.get("llm_rows", 0),
+                    "memory_rows": result.get("memory_rows", 0),
+                    "dictionary_rows": result.get("dictionary_rows", 0),
+                    "passthrough_rows": result.get("passthrough_rows", 0),
+                    "duplicate_rows": result.get("duplicate_rows", 0),
+                    "untranslated_chinese_rows": result.get("untranslated_chinese_rows", 0),
+                    "qc_flagged_rows": result.get("qc_flagged_rows", 0),
                     "issues": result["issues"],
                 }
             )

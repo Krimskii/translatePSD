@@ -265,6 +265,10 @@ def _resolve_batch_size(texts):
     max_len = max((len(t) for t in texts), default=0)
     avg_len = (sum(len(t) for t in texts) / len(texts)) if texts else 0
 
+    if max_len <= 80 and avg_len <= 45:
+        return 18
+    if max_len <= 160 and avg_len <= 80:
+        return 12
     if max_len >= 700 or avg_len >= 260:
         return 2
     if max_len >= 420 or avg_len >= 180:
@@ -272,6 +276,33 @@ def _resolve_batch_size(texts):
     if max_len >= 260 or avg_len >= 120:
         return 5
     return 8
+
+
+def _pending_complexity(item):
+    text = str(item["text"])
+    length = len(text)
+    punctuation = text.count("，") + text.count(",") + text.count("。") + text.count(";") + text.count("；")
+    if length >= 700 or punctuation >= 8:
+        return 4
+    if length >= 420 or punctuation >= 5:
+        return 3
+    if length >= 180 or punctuation >= 3:
+        return 2
+    if length >= 80:
+        return 1
+    return 0
+
+
+def _iter_pending_batches(pending_items):
+    buckets = {}
+    for item in pending_items:
+        buckets.setdefault(_pending_complexity(item), []).append(item)
+
+    for complexity in sorted(buckets):
+        bucket = sorted(buckets[complexity], key=lambda item: len(str(item["text"])))
+        batch_size = _resolve_batch_size([item["text"] for item in bucket])
+        for start in range(0, len(bucket), batch_size):
+            yield bucket[start : start + batch_size], batch_size, complexity
 
 
 def _collect_qc_flags(source_text, translated_text):
@@ -302,14 +333,18 @@ def translate_df(df):
     unique_pending = plan["pending"]
     LOGGER.info("Translation routing stats: %s", plan["stats"])
 
-    pending_texts = [item["text"] for item in unique_pending]
-    batch_size = _resolve_batch_size(pending_texts)
-    LOGGER.info("Translating %s unique rows with batch size %s", len(unique_pending), batch_size)
+    LOGGER.info("Translating %s unique rows with dynamic batches", len(unique_pending))
 
-    for i in range(0, len(unique_pending), batch_size):
-        batch_items = unique_pending[i : i + batch_size]
+    processed_unique = 0
+    for batch_items, batch_size, complexity in _iter_pending_batches(unique_pending):
         batch = [item["text"] for item in batch_items]
-        LOGGER.info("batch %s / %s", i, len(unique_pending))
+        LOGGER.info(
+            "batch %s / %s, size=%s, complexity=%s",
+            processed_unique,
+            len(unique_pending),
+            batch_size,
+            complexity,
+        )
 
         try:
             model_results = ollama_batch(batch)
@@ -331,6 +366,7 @@ def translate_df(df):
                 sources[row_idx] = source_name if row_idx == item["rows"][0] else f"{source_name}_duplicate"
                 untranslated[row_idx] = has_leftover
                 qc_flags[row_idx] = flags
+        processed_unique += len(batch_items)
 
     for idx, original in enumerate(texts):
         if translated[idx] is None:
