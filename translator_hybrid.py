@@ -12,6 +12,7 @@ from translation_memory import (
     save_memory,
     update_memory_entry_in_store,
 )
+from translation_router import build_translation_plan, normalize_source_text
 from translator_batch import ollama_batch, ollama_translate_one
 from translator_deepseek import deepseek_available, deepseek_translate
 
@@ -286,34 +287,20 @@ def _collect_qc_flags(source_text, translated_text):
 
 def translate_df(df):
     working_df = df.copy()
-    texts = [str(text).strip()[:1400] for text in working_df["text"].astype(str).tolist()]
+    texts = [normalize_source_text(text) for text in working_df["text"].astype(str).tolist()]
     total = len(texts)
     sections = [detect_section_for_text(text) for text in texts]
     memory, removed_bad_memory = clean_memory(load_memory())
     if removed_bad_memory:
         LOGGER.info("Removed %s bad translation-memory entries", removed_bad_memory)
-    translated = [None] * total
-    sources = [None] * total
-    untranslated = [False] * total
-    qc_flags = [""] * total
-    unique_pending = []
-    unique_index = {}
 
-    for idx, (text, section) in enumerate(zip(texts, sections)):
-        cached_text, cached_source = _memory_first_candidate(text, section, memory)
-        if cached_text:
-            translated[idx] = cached_text
-            sources[idx] = cached_source
-            untranslated[idx] = has_chinese(cached_text)
-            qc_flags[idx] = _collect_qc_flags(text, cached_text)
-            continue
-
-        key = (section, text)
-        if key not in unique_index:
-            unique_index[key] = len(unique_pending)
-            unique_pending.append({"section": section, "text": text, "rows": [idx]})
-        else:
-            unique_pending[unique_index[key]]["rows"].append(idx)
+    plan = build_translation_plan(texts, sections, memory)
+    translated = plan["translated"]
+    sources = plan["sources"]
+    untranslated = plan["untranslated"]
+    qc_flags = plan["qc_flags"]
+    unique_pending = plan["pending"]
+    LOGGER.info("Translation routing stats: %s", plan["stats"])
 
     pending_texts = [item["text"] for item in unique_pending]
     batch_size = _resolve_batch_size(pending_texts)
@@ -350,6 +337,12 @@ def translate_df(df):
             translated[idx] = original
         if sources[idx] is None:
             sources[idx] = "fallback"
+        if sources[idx] == "passthrough":
+            translated[idx] = original
+            untranslated[idx] = False
+            qc_flags[idx] = qc_flags[idx] or ""
+            working_df.at[idx, "cleaned_translated"] = original
+            continue
         cleaned_text, has_leftover, cleanup_flags = finalize_translation(original, translated[idx], sections[idx])
         translated[idx] = cleaned_text
         working_df.at[idx, "cleaned_translated"] = cleaned_text if "cleaned_translated" in working_df.columns else cleaned_text
