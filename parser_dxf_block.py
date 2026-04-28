@@ -6,6 +6,19 @@ from dataclasses import dataclass
 LOGGER = logging.getLogger(__name__)
 MTEXT_INLINE_RE = re.compile(r"\{\\.*?;")
 CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
+TEXT_LETTER_RE = re.compile(r"[\u4e00-\u9fffA-Za-zА-Яа-яЁё]")
+LATIN_WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё]{2,}")
+NUMERIC_OR_MEASURE_RE = re.compile(
+    r"""
+    ^[\s\d
+    .,\-+−–—_=:/\\|#№()\[\]{}<>*
+    xX×Øø°'"\u2032\u2033
+    %‰
+    mMмМcCсСkKкКgGгГtTтТnNнНpPпПaAаАvVвВwWвВhHчЧ
+    ]+$
+    """,
+    re.VERBOSE,
+)
 
 
 @dataclass
@@ -34,6 +47,26 @@ def clean_mtext(text):
 
 def _safe_text(value):
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def is_translatable_text(text):
+    value = clean_mtext(text)
+    if not value:
+        return False
+
+    if CHINESE_RE.search(value):
+        return True
+
+    if not TEXT_LETTER_RE.search(value):
+        return False
+
+    # Numeric CAD labels, dimensions and units should stay in the drawing,
+    # but they do not need translation or LLM validation.
+    compact = re.sub(r"\s+", "", value)
+    if NUMERIC_OR_MEASURE_RE.fullmatch(compact):
+        return False
+
+    return bool(LATIN_WORD_RE.search(value))
 
 
 def _dimension_text(entity):
@@ -106,19 +139,26 @@ def _add_context(record, *, block_name="", layout_name="", notes=""):
 
 def extract_text_records(doc):
     records = []
+    skipped = 0
 
     for layout in doc.layouts:
         layout_name = layout.name
         for entity in layout:
             for record in _iter_text_candidates(entity):
-                records.append(_add_context(record, layout_name=layout_name))
+                if is_translatable_text(record.text):
+                    records.append(_add_context(record, layout_name=layout_name))
+                else:
+                    skipped += 1
 
     for block in doc.blocks:
         if block.name.startswith("*"):
             continue
         for entity in block:
             for record in _iter_text_candidates(entity):
-                records.append(_add_context(record, block_name=block.name))
+                if is_translatable_text(record.text):
+                    records.append(_add_context(record, block_name=block.name))
+                else:
+                    skipped += 1
 
     deduped = []
     seen = set()
@@ -129,7 +169,7 @@ def extract_text_records(doc):
         seen.add(key)
         deduped.append(record)
 
-    LOGGER.info("DXF extractor found %s text records", len(deduped))
+    LOGGER.info("DXF extractor found %s translatable text records, skipped %s numeric/CAD labels", len(deduped), skipped)
     return deduped
 
 
