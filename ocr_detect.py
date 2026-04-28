@@ -4,14 +4,24 @@ import subprocess
 import tempfile
 from io import StringIO
 
-import cv2
-import numpy as np
 import pandas as pd
 
 
 os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 
 _OCR = None
+
+
+def _cv2():
+    import cv2
+
+    return cv2
+
+
+def _np():
+    import numpy as np
+
+    return np
 
 
 def _build_ocr_instance():
@@ -45,6 +55,7 @@ def _get_ocr():
 
 
 def _bbox_to_polygon(bbox):
+    np = _np()
     arr = np.array(bbox, dtype=float)
     if arr.ndim == 1 and arr.size >= 4:
         x0, y0, x1, y1 = arr[:4].tolist()
@@ -182,6 +193,7 @@ def _extract_lines(result):
 
 
 def _prepare_images(img):
+    cv2 = _cv2()
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     denoised = cv2.GaussianBlur(gray, (3, 3), 0)
     adaptive = cv2.adaptiveThreshold(
@@ -305,6 +317,7 @@ def _tesseract_tsv_lines(img_path):
 
 
 def _tesseract_tsv_lines_from_image(image):
+    cv2 = _cv2()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
         cv2.imwrite(tmp.name, image)
         tmp_path = tmp.name
@@ -335,6 +348,8 @@ def _run_ocr(image):
 
 
 def detect_text_boxes(img_path, *, merge=True, min_score=0.2, min_size=6):
+    cv2 = _cv2()
+    np = _np()
     img = cv2.imread(img_path)
     if img is None:
         raise FileNotFoundError(f"Image not found or unreadable: {img_path}")

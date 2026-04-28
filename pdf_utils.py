@@ -5,12 +5,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import cv2
 import fitz
-import numpy as np
 import pandas as pd
 
-from ocr_detect import detect_text_boxes
 from post_translate_fix import has_chinese
 
 
@@ -262,6 +259,14 @@ def _line_blocks_from_words(words, page_index, *, source="ocr_textpage"):
 
 
 def _ocr_blocks_from_raster(page, page_index, *, aggressive=False):
+    try:
+        import cv2
+        import numpy as np
+        from ocr_detect import detect_text_boxes
+    except Exception as exc:
+        LOGGER.warning("Raster OCR dependencies are unavailable: %s", exc)
+        return []
+
     matrix = fitz.Matrix(4, 4) if aggressive else fitz.Matrix(3, 3)
     pix = page.get_pixmap(matrix=matrix, alpha=False)
     image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n).copy()
