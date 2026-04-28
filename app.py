@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from batch_processing import build_batch_zip, process_uploaded_file
+from deepseek_consult import run_deepseek_audit
 from llm_validator import llm_validate_and_edit_df
 from normative_dictionary import (
     DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH,
@@ -36,6 +37,9 @@ st.caption("Для CAD загружайте `DXF`. Если исходник в 
 
 if "normative_cleaned" not in st.session_state:
     st.session_state["normative_cleaned"] = clean_normative_candidates()
+
+if "deepseek_audit" not in st.session_state:
+    st.session_state["deepseek_audit"] = None
 
 if st.session_state.get("normative_cleaned", 0):
     st.info(f"Очищено мусорных кандидатов из словаря: {st.session_state['normative_cleaned']}")
@@ -240,6 +244,46 @@ if uploaded_files:
                 f"QC={metrics['qc_flagged_rows']}, "
                 f"CN_left={metrics['untranslated_chinese_rows']}"
             )
+
+            with st.expander("DeepSeek аудит решения"):
+                st.caption(
+                    "Отправляет не файл целиком, а компактный отчет: метрики и выборку проблемных строк. "
+                    "Нужен `DEEPSEEK_API_KEY` в окружении."
+                )
+                audit_focus = st.text_area(
+                    "Что спросить у DeepSeek",
+                    value=(
+                        "Проверь текущий пайплайн перевода китайской ПСД: качество, скорость, "
+                        "остатки китайского, OCR/PDF/DXF, словари и QC."
+                    ),
+                    height=90,
+                )
+                if st.button("Запросить DeepSeek аудит"):
+                    with st.spinner("DeepSeek анализирует метрики и проблемные строки..."):
+                        try:
+                            st.session_state["deepseek_audit"] = run_deepseek_audit(
+                                st.session_state.df.copy(),
+                                file_name=uploaded_file.name,
+                                user_focus=audit_focus,
+                            )
+                        except Exception as exc:
+                            st.error(f"DeepSeek аудит не выполнен: {exc}")
+
+                if st.session_state.get("deepseek_audit"):
+                    audit = st.session_state["deepseek_audit"]
+                    st.markdown(audit["answer"])
+                    st.download_button(
+                        "Скачать DeepSeek audit.md",
+                        data=audit["answer"].encode("utf-8-sig"),
+                        file_name=build_ru_name(uploaded_file.name, output_ext=".deepseek_audit.md"),
+                        mime="text/markdown",
+                    )
+                    st.download_button(
+                        "Скачать отправленный prompt.md",
+                        data=audit["prompt"].encode("utf-8-sig"),
+                        file_name=build_ru_name(uploaded_file.name, output_ext=".deepseek_prompt.md"),
+                        mime="text/markdown",
+                    )
 
         try:
             if filename.endswith(".xlsx") or filename.endswith(".xls"):
