@@ -22,6 +22,7 @@ LOGGER = logging.getLogger(__name__)
 SHORT_BATCH_SIZE = int(os.getenv("OLLAMA_SHORT_BATCH_SIZE", "32"))
 MEDIUM_BATCH_SIZE = int(os.getenv("OLLAMA_MEDIUM_BATCH_SIZE", "18"))
 DEFAULT_BATCH_SIZE = int(os.getenv("OLLAMA_DEFAULT_BATCH_SIZE", "10"))
+NORMATIVE_SYNC_MAX_ROWS = int(os.getenv("NORMATIVE_SYNC_MAX_ROWS", "3000"))
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 LATIN_ONLY_RE = re.compile(r"^[A-Za-z0-9\s,.;:()/%×\-–—_]+$")
 PUNCT_ONLY_RE = re.compile(r"^[\s\d,.;:()/%×\-–—_]+$")
@@ -320,11 +321,53 @@ def _collect_qc_flags(source_text, translated_text):
     return ",".join(sorted(set(flag for flag in flags if flag)))
 
 
+def _detect_sections_cached(texts):
+    cache = {}
+    sections = []
+    for text in texts:
+        if text not in cache:
+            cache[text] = detect_section_for_text(text)
+        sections.append(cache[text])
+    return sections
+
+
+def _sync_normative_candidates_limited(df):
+    if df.empty:
+        return
+
+    if len(df) <= NORMATIVE_SYNC_MAX_ROWS:
+        sync_normative_candidates(df)
+        return
+
+    source = df.get("translation_source")
+    if source is None:
+        candidate_df = df.head(NORMATIVE_SYNC_MAX_ROWS).copy()
+    else:
+        source = source.astype(str)
+        mask = (
+            source.str.startswith(("memory", "section_dict", "structured_dict", "ollama", "deepseek"))
+            & ~source.str.contains("duplicate", regex=False)
+            & ~source.str.startswith("passthrough")
+        )
+        candidate_df = df.loc[mask].head(NORMATIVE_SYNC_MAX_ROWS).copy()
+
+    if candidate_df.empty:
+        LOGGER.info("Skipping normative candidate sync for large document: no viable candidate rows")
+        return
+
+    LOGGER.info(
+        "Large document: syncing %s/%s rows to normative candidates",
+        len(candidate_df),
+        len(df),
+    )
+    sync_normative_candidates(candidate_df)
+
+
 def translate_df(df):
     working_df = df.copy()
     texts = [normalize_source_text(text) for text in working_df["text"].astype(str).tolist()]
     total = len(texts)
-    sections = [detect_section_for_text(text) for text in texts]
+    sections = _detect_sections_cached(texts)
     memory, removed_bad_memory = clean_memory(load_memory())
     if removed_bad_memory:
         LOGGER.info("Removed %s bad translation-memory entries", removed_bad_memory)
@@ -403,5 +446,5 @@ def translate_df(df):
     working_df["translation_source"] = sources
     working_df["untranslated_chinese"] = untranslated
     working_df["qc_flags"] = qc_flags
-    sync_normative_candidates(working_df)
+    _sync_normative_candidates_limited(working_df)
     return working_df

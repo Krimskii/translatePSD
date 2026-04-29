@@ -4,6 +4,7 @@ import json
 import os
 import re
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -29,6 +30,7 @@ def _ensure_parent(path=BOOSTER_TERMS_PATH):
         parent.mkdir(parents=True, exist_ok=True)
 
 
+@lru_cache(maxsize=4)
 def load_booster_terms(path=BOOSTER_TERMS_PATH):
     if not os.path.exists(path):
         return {}
@@ -44,6 +46,7 @@ def save_booster_terms(terms, path=BOOSTER_TERMS_PATH):
     _ensure_parent(path)
     with open(path, "w", encoding="utf-8") as file:
         json.dump(terms, file, ensure_ascii=False, indent=2, sort_keys=True)
+    load_booster_terms.cache_clear()
 
 
 def _known_sources():

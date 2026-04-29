@@ -122,6 +122,7 @@ def build_translation_plan(texts, sections, memory):
     qc_flags = [""] * len(texts)
     pending = []
     pending_index = {}
+    fast_cache = {}
     stats = {
         "rows": len(texts),
         "passthrough": 0,
@@ -132,7 +133,13 @@ def build_translation_plan(texts, sections, memory):
     }
 
     for idx, (text, section) in enumerate(zip(texts, sections)):
-        fast = resolve_fast_translation(text, section, memory)
+        key = (section, stable_text_hash(text))
+        if key in fast_cache:
+            fast = fast_cache[key]
+        else:
+            fast = resolve_fast_translation(text, section, memory)
+            fast_cache[key] = fast
+
         if fast:
             translated[idx] = fast["translated"]
             sources[idx] = fast["source"]
@@ -146,7 +153,6 @@ def build_translation_plan(texts, sections, memory):
                 stats["dictionary"] += 1
             continue
 
-        key = (section, stable_text_hash(text))
         if key not in pending_index:
             pending_index[key] = len(pending)
             pending.append({"section": section, "text": text, "rows": [idx]})

@@ -8,4 +8,6 @@ venv/
 ocr_env/
 tmp/
 .env
+api.txt
+dictionary/deepseek_terms.json
 *.translated.txt
