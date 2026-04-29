@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 
 from normative_dictionary import sync_normative_candidates
@@ -18,6 +19,9 @@ from translator_deepseek import deepseek_available, deepseek_translate
 
 
 LOGGER = logging.getLogger(__name__)
+SHORT_BATCH_SIZE = int(os.getenv("OLLAMA_SHORT_BATCH_SIZE", "32"))
+MEDIUM_BATCH_SIZE = int(os.getenv("OLLAMA_MEDIUM_BATCH_SIZE", "18"))
+DEFAULT_BATCH_SIZE = int(os.getenv("OLLAMA_DEFAULT_BATCH_SIZE", "10"))
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 LATIN_ONLY_RE = re.compile(r"^[A-Za-z0-9\s,.;:()/%×\-–—_]+$")
 PUNCT_ONLY_RE = re.compile(r"^[\s\d,.;:()/%×\-–—_]+$")
@@ -266,16 +270,16 @@ def _resolve_batch_size(texts):
     avg_len = (sum(len(t) for t in texts) / len(texts)) if texts else 0
 
     if max_len <= 80 and avg_len <= 45:
-        return 18
+        return SHORT_BATCH_SIZE
     if max_len <= 160 and avg_len <= 80:
-        return 12
+        return MEDIUM_BATCH_SIZE
     if max_len >= 700 or avg_len >= 260:
         return 2
     if max_len >= 420 or avg_len >= 180:
         return 3
     if max_len >= 260 or avg_len >= 120:
         return 5
-    return 8
+    return DEFAULT_BATCH_SIZE
 
 
 def _pending_complexity(item):

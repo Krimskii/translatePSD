@@ -3,6 +3,7 @@ import os
 import re
 from functools import lru_cache
 
+from dictionary_booster import load_booster_terms
 from normative_dictionary import apply_normative_terms, load_normative_dictionary
 from validator_sections import detect_section
 
@@ -67,12 +68,17 @@ def detect_section_for_text(text):
 def build_section_term_map(section=None):
     section_name = str(section or "").strip() or "UNKNOWN"
     merged_terms = dict(load_section_terms().get(section_name, {}))
+    booster_terms = load_booster_terms()
 
     for source, target in load_normative_dictionary().get("ALL", {}).items():
         merged_terms[source] = target
 
     for source, target in load_normative_dictionary().get(section_name, {}).items():
         merged_terms[source] = target
+
+    for key in ("ALL", section_name, "UNKNOWN"):
+        for source, target in booster_terms.get(key, {}).items():
+            merged_terms[source] = target
 
     return merged_terms
 

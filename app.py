@@ -6,6 +6,7 @@ import streamlit as st
 
 from batch_processing import build_batch_zip, process_uploaded_file
 from deepseek_consult import run_deepseek_audit
+from dictionary_booster import boost_dictionary_with_deepseek, extract_booster_candidates
 from llm_validator import llm_validate_and_edit_df
 from normative_dictionary import (
     DEFAULT_PATH as NORMATIVE_DICTIONARY_PATH,
@@ -195,6 +196,35 @@ if uploaded_files:
                 "PDF не дал текстовых блоков даже после OCR. "
                 "Вероятно, это сложный скан или качество страниц слишком низкое для распознавания."
             )
+
+        if filename.endswith(".dxf") and not st.session_state.df.empty:
+            with st.expander("DXF ускорение через DeepSeek-словарь"):
+                st.caption(
+                    "Для больших DXF: выбирает частотные китайские подписи, одним запросом DeepSeek "
+                    "делает мини-словарь и применяет его до Ollama. Файл целиком не отправляется."
+                )
+                preview_candidates = extract_booster_candidates(st.session_state.df, limit=30)
+                st.write(f"Найдено кандидатов для уточнения словаря: {len(preview_candidates)}")
+                if not preview_candidates.empty:
+                    st.dataframe(preview_candidates.head(20), width="stretch")
+                col_boost, col_hint = st.columns([1, 2])
+                with col_boost:
+                    run_boost = st.button("Уточнить DXF словарь через DeepSeek")
+                with col_hint:
+                    st.caption("После успешного уточнения нажми `Перевести`: новые термины применятся сразу.")
+                if run_boost:
+                    with st.spinner("DeepSeek собирает мини-словарь по частотным DXF-строкам..."):
+                        try:
+                            result = boost_dictionary_with_deepseek(st.session_state.df)
+                            summary = result["summary"]
+                            st.success(
+                                "DXF словарь обновлен: "
+                                f"added={summary['added']}, updated={summary['updated']}, path={summary['path']}"
+                            )
+                            if not result["terms"].empty:
+                                st.dataframe(result["terms"], width="stretch")
+                        except Exception as exc:
+                            st.error(f"Не удалось уточнить DXF словарь через DeepSeek: {exc}")
 
         if st.button("Перевести"):
             with st.spinner("Перевод..."):
