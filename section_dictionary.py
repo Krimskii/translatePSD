@@ -42,6 +42,24 @@ SECTION_TERMS_FALLBACK = {
         "总平面": "генеральный план",
     },
     "UNKNOWN": {
+        "个中": "в том числе",
+        "个": "шт.",
+        "只": "шт.",
+        "件": "шт.",
+        "套": "комплект",
+        "中": "средний",
+        "中国标准": "китайский стандарт",
+        "中国": "Китай",
+        "单位": "единица измерения",
+        "序号": "номер",
+        "绿地率": "коэффициент озеленения",
+        "容积率": "коэффициент плотности застройки",
+        "建筑系数": "коэффициент застройки",
+        "建筑物占地面积": "площадь застройки здания",
+        "规划建设用地面积": "площадь земельного участка под строительство",
+        "计容总建筑面积": "общая расчетная площадь застройки",
+        "货车停车位": "машино-места для грузовых автомобилей",
+        "小汽车停车位": "машино-места для легковых автомобилей",
         "原料": "сырье",
         "辅料": "вспомогательные материалы",
     },
@@ -67,7 +85,9 @@ def detect_section_for_text(text):
 
 def build_section_term_map(section=None):
     section_name = str(section or "").strip() or "UNKNOWN"
-    merged_terms = dict(load_section_terms().get(section_name, {}))
+    base_terms = load_section_terms()
+    merged_terms = dict(base_terms.get("UNKNOWN", {}))
+    merged_terms.update(base_terms.get(section_name, {}))
     booster_terms = load_booster_terms()
 
     for source, target in load_normative_dictionary().get("ALL", {}).items():

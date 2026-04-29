@@ -4,6 +4,7 @@ from section_dictionary import build_section_term_map, detect_section_for_text, 
 
 
 CHINESE_FRAGMENT_RE = re.compile(r"[\u4e00-\u9fff]+")
+NUMBER_CN_UNIT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*([个只件套])")
 PROMPT_LEAK_RE = re.compile(
     r"^\s*(?:rules?|правила)\s*:\s*.*?(?:text|текст)\s*:\s*",
     flags=re.IGNORECASE | re.DOTALL,
@@ -33,6 +34,8 @@ FULLWIDTH_PUNCT_MAP = str.maketrans(
 )
 
 PHRASE_REPLACEMENTS = {
+    "中国标准": "китайский стандарт",
+    "个中": "в том числе",
     "从原料到成品": "от сырья до готовой продукции",
     "从原料到产品": "от сырья до готовой продукции",
     "铝材标准工业流程": "стандартный промышленный процесс алюминиевых изделий",
@@ -56,6 +59,22 @@ PHRASE_REPLACEMENTS = {
 }
 
 TOKEN_REPLACEMENTS = {
+    "个": "шт.",
+    "只": "шт.",
+    "件": "шт.",
+    "套": "комплект",
+    "中": "средний",
+    "中国": "Китай",
+    "单位": "единица измерения",
+    "序号": "номер",
+    "绿地率": "коэффициент озеленения",
+    "容积率": "коэффициент плотности застройки",
+    "建筑系数": "коэффициент застройки",
+    "建筑物占地面积": "площадь застройки здания",
+    "规划建设用地面积": "площадь земельного участка под строительство",
+    "计容总建筑面积": "общая расчетная площадь застройки",
+    "货车停车位": "машино-места для грузовых автомобилей",
+    "小汽车停车位": "машино-места для легковых автомобилей",
     "能源": "Энергоносители",
     "电": "электроэнергия",
     "天然气": "природный газ",
@@ -154,6 +173,7 @@ def _build_residual_dictionary(section=None):
 def replace_known_terms(text, section=None):
     value = normalize_punctuation(text)
     mapping = _build_residual_dictionary(section)
+    value = NUMBER_CN_UNIT_RE.sub(lambda match: f"{match.group(1)} {mapping.get(match.group(2), match.group(2))}", value)
     value = _apply_mapping(value, mapping)
     return normalize_punctuation(value)
 
@@ -186,6 +206,7 @@ def _fragment_from_dict(fragment, mapping):
 def replace_residual_chinese(text, section=None):
     mapping = _build_residual_dictionary(section)
     value = normalize_punctuation(text)
+    value = NUMBER_CN_UNIT_RE.sub(lambda match: f"{match.group(1)} {mapping.get(match.group(2), match.group(2))}", value)
 
     def repl(match):
         fragment = match.group(0)
@@ -240,6 +261,12 @@ def finalize_translation(source_text, translated_text, section=None):
     qc_flags = []
     untranslated = has_chinese(value)
     if untranslated:
+        if re.fullmatch(r"[\u4e00-\u9fff]", value):
+            qc_flags.append("single_char_chinese")
+        if re.search(r"\d\s*[\u4e00-\u9fff]", value):
+            qc_flags.append("number_prefix_chinese")
+        if len(CHINESE_FRAGMENT_RE.findall(value)) >= 2:
+            qc_flags.append("multiple_chinese_fragments")
         qc_flags.append("needs_manual_review")
 
     return value, untranslated, qc_flags
