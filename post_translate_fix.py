@@ -5,6 +5,8 @@ from section_dictionary import build_section_term_map, detect_section_for_text, 
 
 CHINESE_FRAGMENT_RE = re.compile(r"[\u4e00-\u9fff]+")
 NUMBER_CN_UNIT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*([个只件套])")
+EMPTY_PLACEHOLDER_RE = re.compile(r"\(\s*\)|\[\s*\]")
+UNIT_TOKEN_RE = re.compile(r"(?<![A-Za-zА-Яа-я])(?:m2|m3|m²|m³|㎡|m³|м2|м3|м²|м³|%|kW|KW|kw|кВт)(?![A-Za-zА-Яа-я])")
 PROMPT_LEAK_RE = re.compile(
     r"^\s*(?:rules?|правила)\s*:\s*.*?(?:text|текст)\s*:\s*",
     flags=re.IGNORECASE | re.DOTALL,
@@ -36,6 +38,22 @@ FULLWIDTH_PUNCT_MAP = str.maketrans(
 PHRASE_REPLACEMENTS = {
     "中国标准": "китайский стандарт",
     "个中": "в том числе",
+    "是 ( )": "является ( )",
+    "是()": "является ( )",
+    "其他( )": "прочее ( )",
+    "其他()": "прочее ( )",
+    "容量(m3)": "емкость (м3)",
+    "容量 (m3)": "емкость (м3)",
+    "容量(m³)": "емкость (м3)",
+    "容量 (m³)": "емкость (м3)",
+    "设备容量(m3)": "емкость оборудования (м3)",
+    "设备容量 (m3)": "емкость оборудования (м3)",
+    "设备容量(м3)": "емкость оборудования (м3)",
+    "设备容量 (м3)": "емкость оборудования (м3)",
+    "设备容量(kW)": "мощность оборудования (кВт)",
+    "设备容量 (kW)": "мощность оборудования (кВт)",
+    "设备容量(кВт)": "мощность оборудования (кВт)",
+    "设备容量 (кВт)": "мощность оборудования (кВт)",
     "从原料到成品": "от сырья до готовой продукции",
     "从原料到产品": "от сырья до готовой продукции",
     "铝材标准工业流程": "стандартный промышленный процесс алюминиевых изделий",
@@ -64,7 +82,12 @@ TOKEN_REPLACEMENTS = {
     "件": "шт.",
     "套": "комплект",
     "中": "средний",
+    "统": "система",
     "中国": "Китай",
+    "容量": "емкость",
+    "设备": "оборудование",
+    "其他": "прочее",
+    "是": "является",
     "单位": "единица измерения",
     "序号": "номер",
     "绿地率": "коэффициент озеленения",
@@ -127,6 +150,8 @@ MIXED_OUTPUT_REPLACEMENTS = {
     "входные двери цеха": "дверь цеха",
     "spray machine": "распылительная установка",
     "water spray": "распылительная установка",
+    "оборудованиеемкость": "емкость оборудования",
+    "оборудование емкость": "емкость оборудования",
 }
 
 
@@ -143,6 +168,11 @@ def _apply_mapping(text, mapping):
 
 def normalize_punctuation(text):
     value = str(text).translate(FULLWIDTH_PUNCT_MAP)
+    value = value.replace("㎡", "m2")
+    value = value.replace("m²", "m2").replace("m³", "m3")
+    value = value.replace("м²", "м2").replace("м³", "м3")
+    value = re.sub(r"\bm2\b", "м2", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bm3\b", "м3", value, flags=re.IGNORECASE)
     value = value.replace("_", " ")
     value = re.sub(r"\s+", " ", value)
     value = re.sub(r"\(\s+", "(", value)
@@ -153,10 +183,61 @@ def normalize_punctuation(text):
     value = re.sub(r"(?<=\d)([А-Яа-яЁёA-Za-z])", r" \1", value)
     value = re.sub(r"(?<=\d)(\()", r" \1", value)
     value = re.sub(r"(?<=[А-Яа-яЁё])(?=\d)", " ", value)
+    value = re.sub(r"\b([mм])\s+([23])\b", r"\1\2", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bk\s*w\b", "кВт", value, flags=re.IGNORECASE)
     value = re.sub(r"\s+", " ", value)
     value = re.sub(r"\s+([,.;:)])", r"\1", value)
+    value = re.sub(r"(?<=[А-Яа-яЁё])\(", " (", value)
     value = value.strip(" -_")
     return value.strip()
+
+
+def _extract_required_units(text):
+    units = []
+    for match in UNIT_TOKEN_RE.finditer(normalize_punctuation(text)):
+        unit = match.group(0)
+        normalized = {
+            "m2": "м2",
+            "m3": "м3",
+            "m²": "м2",
+            "m³": "м3",
+            "㎡": "м2",
+            "кВт": "кВт",
+            "kW": "кВт",
+            "KW": "кВт",
+            "kw": "кВт",
+        }.get(unit, unit)
+        if normalized not in units:
+            units.append(normalized)
+    return units
+
+
+def _unit_present(text, unit):
+    value = normalize_punctuation(text).lower()
+    variants = {
+        "м2": {"м2", "m2", "м²", "m²", "㎡"},
+        "м3": {"м3", "m3", "м³", "m³"},
+        "кВт": {"квт", "kw", "kwt", "кw"},
+        "%": {"%"},
+    }.get(unit, {unit.lower()})
+    return any(variant.lower() in value for variant in variants)
+
+
+def preserve_source_units(source_text, translated_text):
+    value = str(translated_text).strip()
+    missing = [unit for unit in _extract_required_units(source_text) if not _unit_present(value, unit)]
+    if not missing:
+        return value, []
+
+    if EMPTY_PLACEHOLDER_RE.search(value):
+        return value, [f"missing_unit:{unit}" for unit in missing]
+
+    suffix = ", ".join(missing)
+    if value.endswith(")"):
+        value = f"{value} ({suffix})"
+    else:
+        value = f"{value} ({suffix})"
+    return value, [f"restored_unit:{unit}" for unit in missing]
 
 
 def _build_residual_dictionary(section=None):
@@ -259,6 +340,13 @@ def finalize_translation(source_text, translated_text, section=None):
     value = normalize_punctuation(value)
 
     qc_flags = []
+    value, unit_flags = preserve_source_units(source_text, value)
+    qc_flags.extend(unit_flags)
+
+    if EMPTY_PLACEHOLDER_RE.search(source_text) or EMPTY_PLACEHOLDER_RE.search(value):
+        qc_flags.append("empty_placeholder")
+        value = EMPTY_PLACEHOLDER_RE.sub("( )", value)
+
     untranslated = has_chinese(value)
     if untranslated:
         if re.fullmatch(r"[\u4e00-\u9fff]", value):
