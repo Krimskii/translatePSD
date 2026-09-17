@@ -1,156 +1,72 @@
 # translatePSD
 
-Инструмент для локализации проектной документации с китайского на русский:
-- Streamlit UI для Excel, PDF, DOCX и DXF
-- пакетная обработка папок и нескольких файлов через UI
-- DXF-перевод с OCR fallback
-- PDF-перекомпоновка с сохранением расположения текстовых блоков
-- DOCX-перевод с сохранением структуры абзацев и таблиц
-- Excel-перевод на уровне отдельных ячеек с сохранением структуры листов
-- память переводов между запусками
-- memory-first перевод и дедупликация одинаковых строк внутри одного прогона
-- словари по разделам `ОВ`, `ВК`, `ЭОМ`, `КЖ`, `АР`
-- словари по разделу `ТХ` для технологических описаний и производственных потоков
-- нормативный Excel-словарь РК с автопополнением кандидатов
-- автооценка кандидатов словаря и перенос `RECOMMENDED` терминов в `approved_terms`
-- базовая нормализация и валидация результата
-- валидация по утвержденным терминам из нормативного словаря
-- финальный LLM QC-слой для проверки полноты перевода без добавления новых фактов
+**Chinese-to-Russian translation for technical documentation, with terminology, document structure and human review built into the workflow.**
 
-## Что исправлено
+Technical documents are difficult to translate because terminology, numbers, drawings, tables and layout must survive the process. A fluent sentence is insufficient if a unit changes, a label moves or a table loses its meaning.
 
-- убран секрет из исходников, конфиг читается из переменных окружения
-- добавлен недостающий модуль `bbox_to_dxf.py`
-- исправлена DXF-запись и выбор результирующего текста
-- OCR-боксы теперь проецируются обратно в координаты DXF, а не вставляются как пиксели
-- `translate_pdf` теперь реально собирает переведённый PDF, стараясь сохранить исходную разметку блоков
-- убраны жёсткие абсолютные пути из `run_*.py`
-- добавлены зависимости и базовая документация
+translatePSD combines document/CAD processing with dictionaries, translation memory, model routing and validation to support that engineering problem.
 
-## Установка
+## What I built
 
-Проект лучше держать в пути без кириллицы, иначе на Windows виртуальные окружения и часть инструментов могут ломаться.
+- Extraction and reconstructed output for Excel, DOCX, PDF and DXF.
+- Discipline-specific terminology dictionaries and a separate candidate/approval workflow.
+- Persistent, section-aware translation memory and repeated-text deduplication.
+- Ollama/DeepSeek routing and fallback paths for unresolved text.
+- Terminology/rule validators, residual-Chinese checks, normalization, review flags and optional LLM quality review.
+- A Streamlit interface with multi-file/folder processing and ZIP/status output.
+
+## How it works
+
+**Document/CAD input → extraction → terminology/dictionary → translation memory → model routing → translation → validators → human acceptance → reconstructed output**
+
+The sequence expresses the review workflow rather than an enforced execution order. Reconstructed exports are inspected against the source before final human acceptance.
+
+Dictionary and memory lookups resolve known text before model routing. Validators and optional model-assisted checks surface issues for review. If a provider is unavailable, a fallback may retain source text; that still requires translation.
+
+## Supported formats
+
+| Input | Implemented workflow | What the reviewer checks |
+| --- | --- | --- |
+| Excel / XLS | Cell translation and XLSX output | Sheets, numbers, formulas and terminology |
+| DOCX | Paragraph/table processing and reconstruction | Formatting, tables and non-text objects |
+| PDF | Text-block extraction/reconstruction, with OCR paths | OCR errors, tables and text placement |
+| DXF | Drawing text/block processing, with OCR overlay paths | Labels, symbols, size/placement and unchanged geometry |
+| DWG source | Convert to DXF before import | Direct DWG import is not established in the current UI/batch path |
+
+Complex scans and CAD overlays can need manual correction and additional tooling. PDF reconstruction aims to preserve text-block placement rather than guarantee exact page reproduction. Professional output requires human acceptance.
+
+## My role and development approach
+
+I define the product workflow, requirements, acceptance criteria and delivery boundaries. AI coding assistance supports bounded implementation; verification, cross-review and human acceptance remain part of delivery.
+
+The implemented validators support document review. A dedicated automated regression suite and CI gate are proposed next steps.
+
+## Technology
+
+Python · Streamlit · pandas/openpyxl · python-docx · PyMuPDF · ezdxf · OCR integrations · Ollama · optional DeepSeek
+
+Terminology and memory use local CSV/XLSX/JSON workflows.
+
+## Local setup
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-## Переменные окружения
-
-Скопируйте `.env.example` в `.env` или задайте переменные вручную:
-
-- `DEEPSEEK_API_KEY`
-- `DEEPSEEK_BASE_URL`
-- `OLLAMA_URL`
-- `OLLAMA_MODEL`
-- `TRANSLATION_MEMORY_PATH`
-- `NORMATIVE_DICTIONARY_PATH`
-- `APPROVED_TERMS_SEED_PATH`
-- `CANDIDATES_TEMPLATE_PATH`
-- `SECTION_TERMS_PATH`
-
-## Запуск
-
-### Streamlit
-
-```powershell
 streamlit run app.py
 ```
 
-### Быстрый запуск на Windows
+Supply configuration through the process environment using the variable names in [.env.example](.env.example). OCR and external CAD tooling can require additional installation.
 
-Если проект клонирован через `git clone`, можно запускать так:
-
-```powershell
-.\run.ps1
-```
-
-С обновлением из GitHub перед запуском:
-
-```powershell
-.\update_and_run.ps1
-```
-
-Или двойным кликом по:
-
-```text
-start.bat
-```
-
-### DXF
+Existing DXF entry point:
 
 ```powershell
 python run_dxf.py input.dxf output.dxf
 ```
 
-### DXF + OCR
+## Documentation and acceptance
 
-```powershell
-python run_full.py input.dxf output.dxf --tmp-dir tmp
-```
+- [Dictionary workflow](dictionary/README.md)
+- [Quality and acceptance](docs/QUALITY_AND_ACCEPTANCE.md): review criteria, format limits, sample/dictionary rights, provider configuration and historical credential status
 
-### Пакетная обработка
-
-```python
-from translate_project import translate_project
-
-translate_project("source_dir", "output_dir")
-```
-
-### Диагностика PDF
-
-```powershell
-python inspect_pdf_blocks.py input.pdf --output pdf_blocks_report.xlsx
-```
-
-Отчёт показывает режим PDF, источник каждого блока (`text`, `ocr_textpage`, `ocr_raster`, `ocr_raster_aggressive`), страницу, bbox и наличие китайского текста.
-
-## Ограничения
-
-- Память переводов хранится локально в `dictionary/translation_memory.json`, если не переопределить путь через `TRANSLATION_MEMORY_PATH`.
-- Нормативный словарь хранится в `dictionary/normative_terms.xlsx`, если не переопределить путь через `NORMATIVE_DICTIONARY_PATH`.
-- Базовые сиды лежат в `dictionary/approved_terms_seed.csv`, `dictionary/section_terms_seed.json`, `dictionary/candidates_template.csv`.
-- В `approved_terms` нужно вручную утверждать локальные термины и при желании указывать ссылку на норму РК, ГОСТ или СП.
-- Лист `candidates` пополняется автоматически из загруженных документов и помогает собирать новые термины на проверку.
-- В таблице после перевода появляются служебные поля `section`, `translation_source`, `cleaned_translated`, `untranslated_chinese`, `qc_flags`.
-- Для PDF лучше всего сохраняется разметка у документов, где текст доступен как обычные текстовые блоки, а не как сканы.
-- В интерфейсе PDF нужно не только перевести, но и нажать `Скачать PDF`, чтобы собрать итоговый файл.
-- При загрузке нескольких файлов интерфейс собирает ZIP с результатами и общий отчет по статусам.
-- Выходные файлы формируются с исходным именем и суффиксом `_RU`, например `plan_RU.pdf`, `spec_RU.docx`, `1000_RU.dxf`.
-- Для Excel результат сохраняется как `.xlsx`, включая случаи загрузки старого `.xls`.
-- Для CAD-файлов проект принимает `DXF`; если исходный файл в `DWG`, сохраните его в AutoCAD как `DXF` перед загрузкой.
-- Для OCR нужны установленные зависимости `paddleocr` и `opencv-python`.
-- Для OCR fallback в DXF перевод добавляется поверх исходной графики; для сложных чертежей может потребоваться ручная доводка размеров текста.
-- Без работающего Ollama переводчик вернёт исходный текст как fallback.
-- Финальный `LLM QC` проверяет весь документ построчно и добавляет колонки `llm_validation_status` и `llm_validation_notes`.
-- Residual Chinese cleanup нормализует китайскую пунктуацию, заменяет остаточные иероглифы по словарю и выставляет `needs_manual_review` в `qc_flags`, если китайский всё же остался.
-- Для сложных PDF с чертежами и таблицами OCR объединяет PaddleOCR и Tesseract TSV, а также делает зональный и tile-проход по странице.
-
-## Как пополнять словарь под нормы РК
-
-1. Запустите приложение и загрузите несколько типовых файлов по нужному разделу.
-2. Откройте `dictionary/normative_terms.xlsx`.
-3. На листе `candidates` отберите удачные формулировки и перенесите их на лист `approved_terms`.
-4. Для каждой утвержденной пары заполните:
-   - `SECTION` например `ОВ`, `ВК`, `КЖ`
-   - `CN` исходный китайский термин или фразу
-   - `RU` утвержденную формулировку для РК
-   - `STANDARD_REF` например `СП РК 4.02-101-2012`, `ГОСТ 21.601-2011`
-   - `STATUS` поставьте `APPROVED`
-5. Сохраните файл и перезапустите приложение, чтобы словарь перечитался.
-
-## Пересборка словарей и шаблонов
-
-Если нужно начать словарную базу заново:
-
-```powershell
-python rebuild_dictionaries.py
-```
-
-Это действие:
-- пересобирает `dictionary/normative_terms.xlsx` из `dictionary/approved_terms_seed.csv`
-- очищает `candidates`
-- сбрасывает `dictionary/translation_memory.json`
-- оставляет секционные заготовки в `dictionary/section_terms_seed.json`
+Use approved, non-sensitive source material. The acceptance guide records provider-processing permissions, tracked-sample provenance and licensing status; tracked samples are not pre-approved portfolio examples.
